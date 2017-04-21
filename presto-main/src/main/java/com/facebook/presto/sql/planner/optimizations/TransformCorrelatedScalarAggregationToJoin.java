@@ -11,7 +11,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
@@ -30,10 +29,10 @@ import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
+import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
@@ -46,7 +45,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -60,8 +58,7 @@ import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.sea
 import static com.facebook.presto.sql.planner.optimizations.Predicates.isInstanceOfAny;
 import static com.facebook.presto.sql.planner.plan.SimplePlanRewriter.rewriteWith;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableMap;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -152,8 +149,8 @@ public class TransformCorrelatedScalarAggregationToJoin
             }
 
             Symbol nonNull = symbolAllocator.newSymbol("non_null", BooleanType.BOOLEAN);
-            Map<Symbol, Expression> scalarAggregationSourceAssignments = ImmutableMap.<Symbol, Expression>builder()
-                    .putAll(toAssignments(source.get().getNode().getOutputSymbols()))
+            Assignments scalarAggregationSourceAssignments = Assignments.builder()
+                    .putAll(Assignments.identity(source.get().getNode().getOutputSymbols()))
                     .put(nonNull, TRUE_LITERAL)
                     .build();
             ProjectNode scalarAggregationSourceWithNonNullableSymbol = new ProjectNode(
@@ -187,7 +184,12 @@ public class TransformCorrelatedScalarAggregationToJoin
                     inputWithUniqueColumns,
                     scalarAggregationSource,
                     ImmutableList.of(),
+                    ImmutableList.<Symbol>builder()
+                            .addAll(inputWithUniqueColumns.getOutputSymbols())
+                            .addAll(scalarAggregationSource.getOutputSymbols())
+                            .build(),
                     joinExpression,
+                    Optional.empty(),
                     Optional.empty(),
                     Optional.empty());
 
@@ -202,11 +204,12 @@ public class TransformCorrelatedScalarAggregationToJoin
 
             Optional<ProjectNode> subqueryProjection = searchFrom(applyNode.getSubquery())
                     .where(ProjectNode.class::isInstance)
+                    .skipOnlyWhen(EnforceSingleRowNode.class::isInstance)
                     .findFirst();
 
             if (subqueryProjection.isPresent()) {
-                Map<Symbol, Expression> assignments = ImmutableMap.<Symbol, Expression>builder()
-                        .putAll(toAssignments(aggregationNode.get().getOutputSymbols()))
+                Assignments assignments = Assignments.builder()
+                        .putAll(Assignments.identity(aggregationNode.get().getOutputSymbols()))
                         .putAll(subqueryProjection.get().getAssignments())
                         .build();
 
@@ -265,7 +268,7 @@ public class TransformCorrelatedScalarAggregationToJoin
         {
             PlanNodeSearcher filterNodeSearcher = searchFrom(node)
                     .where(FilterNode.class::isInstance)
-                    .skipOnlyWhen(isInstanceOfAny(ProjectNode.class, LimitNode.class));
+                    .skipOnlyWhen(isInstanceOfAny(ProjectNode.class));
             List<FilterNode> filterNodes = filterNodeSearcher.findAll();
 
             if (filterNodes.isEmpty()) {
@@ -293,12 +296,6 @@ public class TransformCorrelatedScalarAggregationToJoin
             List<Expression> uncorrelatedPredicates = ImmutableList.copyOf(predicates.get(false));
 
             node = updateFilterNode(filterNodeSearcher, uncorrelatedPredicates);
-
-            if (!correlatedPredicates.isEmpty()) {
-                // filterNodes condition has changed so Limit node no longer applies for EXISTS subquery
-                node = removeLimitNode(node);
-            }
-
             node = ensureJoinSymbolsAreReturned(node, correlatedPredicates);
 
             return decorrelatedNode(correlatedPredicates, node, correlation);
@@ -332,15 +329,6 @@ public class TransformCorrelatedScalarAggregationToJoin
                     oldFilterNode.getSource(),
                     ExpressionUtils.combineConjuncts(newPredicates));
             return filterNodeSearcher.replaceAll(newFilterNode);
-        }
-
-        private static PlanNode removeLimitNode(PlanNode node)
-        {
-            node = searchFrom(node)
-                    .where(LimitNode.class::isInstance)
-                    .skipOnlyWhen(ProjectNode.class::isInstance)
-                    .removeFirst();
-            return node;
         }
 
         private PlanNode ensureJoinSymbolsAreReturned(PlanNode scalarAggregationSource, List<Expression> joinPredicate)
@@ -418,18 +406,12 @@ public class TransformCorrelatedScalarAggregationToJoin
                     .filter(symbol -> !rewrittenNode.getOutputSymbols().contains(symbol))
                     .collect(toImmutableList());
 
-            Map<Symbol, Expression> assignments = ImmutableMap.<Symbol, Expression>builder()
+            Assignments assignments = Assignments.builder()
                     .putAll(rewrittenNode.getAssignments())
-                    .putAll(toAssignments(symbolsToAdd))
+                    .putAll(Assignments.identity(symbolsToAdd))
                     .build();
 
             return new ProjectNode(idAllocator.getNextId(), rewrittenNode.getSource(), assignments);
         }
-    }
-
-    private static Map<Symbol, Expression> toAssignments(Collection<Symbol> symbols)
-    {
-        return symbols.stream()
-                .collect(toImmutableMap(s -> s, Symbol::toSymbolReference));
     }
 }

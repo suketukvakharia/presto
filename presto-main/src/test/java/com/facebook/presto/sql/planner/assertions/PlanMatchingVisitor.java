@@ -16,12 +16,11 @@ package com.facebook.presto.sql.planner.assertions;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
-import com.facebook.presto.sql.tree.Expression;
-import com.google.common.collect.ImmutableMap;
 
 import java.util.List;
 
@@ -46,11 +45,7 @@ final class PlanMatchingVisitor
     @Override
     public MatchResult visitExchange(ExchangeNode node, PlanMatchPattern pattern)
     {
-        checkState(node.getType() == ExchangeNode.Type.GATHER, "Only GATHER is supported");
         List<List<Symbol>> allInputs = node.getInputs();
-        checkState(allInputs.size() == 1, "Multiple lists of inputs are not supported yet");
-
-        List<Symbol> inputs = allInputs.get(0);
         List<Symbol> outputs = node.getOutputSymbols();
 
         MatchResult result = super.visitExchange(node, pattern);
@@ -59,12 +54,16 @@ final class PlanMatchingVisitor
             return result;
         }
 
-        ImmutableMap.Builder<Symbol, Expression> assignments = ImmutableMap.builder();
-        for (int i = 0; i < inputs.size(); ++i) {
-            assignments.put(outputs.get(i), inputs.get(i).toSymbolReference());
+        SymbolAliases newAliases = result.getAliases();
+        for (List<Symbol> inputs : allInputs) {
+            Assignments.Builder assignments = Assignments.builder();
+            for (int i = 0; i < inputs.size(); ++i) {
+                assignments.put(outputs.get(i), inputs.get(i).toSymbolReference());
+            }
+            newAliases = newAliases.updateAssignments(assignments.build());
         }
 
-        return match(result.getAliases().updateAssignments(assignments.build()));
+        return match(newAliases);
     }
 
     @Override

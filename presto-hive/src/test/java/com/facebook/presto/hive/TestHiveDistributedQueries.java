@@ -20,8 +20,8 @@ import org.testng.annotations.Test;
 import static com.facebook.presto.hive.HiveQueryRunner.createQueryRunner;
 import static com.facebook.presto.spi.type.CharType.createCharType;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
+import static com.facebook.presto.testing.assertions.Assert.assertEquals;
 import static io.airlift.tpch.TpchTable.getTables;
-import static org.testng.Assert.assertEquals;
 
 public class TestHiveDistributedQueries
         extends AbstractTestDistributedQueries
@@ -29,31 +29,13 @@ public class TestHiveDistributedQueries
     public TestHiveDistributedQueries()
             throws Exception
     {
-        super(createQueryRunner(getTables()));
+        super(() -> createQueryRunner(getTables()));
     }
 
     @Override
     public void testDelete()
     {
         // Hive connector currently does not support row-by-row delete
-    }
-
-    @Override
-    public void testAddColumn()
-    {
-        // Hive connector currently does not support schema change
-    }
-
-    @Override
-    public void testRenameColumn()
-    {
-        // Hive connector currently does not support schema change
-    }
-
-    @Override
-    public void testRenameTable()
-    {
-        // Hive connector currently does not support table rename
     }
 
     @Test

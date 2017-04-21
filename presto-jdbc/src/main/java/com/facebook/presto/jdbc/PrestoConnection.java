@@ -62,6 +62,7 @@ public class PrestoConnection
     private final AtomicReference<String> schema = new AtomicReference<>();
     private final AtomicReference<String> timeZoneId = new AtomicReference<>();
     private final AtomicReference<Locale> locale = new AtomicReference<>();
+    private final AtomicReference<ServerInfo> serverInfo = new AtomicReference<>();
 
     private final URI jdbcUri;
     private final URI httpUri;
@@ -566,8 +567,17 @@ public class PrestoConnection
     }
 
     ServerInfo getServerInfo()
+            throws SQLException
     {
-        return queryExecutor.getServerInfo(httpUri);
+        if (serverInfo.get() == null) {
+            try {
+                serverInfo.set(queryExecutor.getServerInfo(httpUri));
+            }
+            catch (RuntimeException e) {
+                throw new SQLException("Error fetching version from server", e);
+            }
+        }
+        return serverInfo.get();
     }
 
     StatementClient startQuery(String sql)
@@ -578,6 +588,7 @@ public class PrestoConnection
                 httpUri,
                 user,
                 source,
+                clientInfo.get("ClientInfo"),
                 catalog.get(),
                 schema.get(),
                 timeZoneId.get(),

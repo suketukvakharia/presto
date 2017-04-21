@@ -43,9 +43,10 @@ public interface LookupSource
         return (pageBuilder, outputChannelOffset) -> false;
     }
 
-    // this is only here for index lookup source
+    boolean isJoinPositionEligible(long currentJoinPosition, int probePosition, Page allProbeChannelsPage);
+
     @Override
-    default void close() {}
+    void close();
 
     interface OuterPositionIterator
     {

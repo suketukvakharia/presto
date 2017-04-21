@@ -30,6 +30,7 @@ import com.facebook.presto.sql.tree.ArrayConstructor;
 import com.facebook.presto.sql.tree.AstVisitor;
 import com.facebook.presto.sql.tree.BetweenPredicate;
 import com.facebook.presto.sql.tree.BinaryLiteral;
+import com.facebook.presto.sql.tree.BindExpression;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CharLiteral;
@@ -69,10 +70,10 @@ import com.facebook.presto.sql.tree.WhenClause;
 import com.facebook.presto.type.RowType;
 import com.facebook.presto.type.RowType.RowField;
 import com.facebook.presto.type.UnknownType;
+import com.facebook.presto.util.maps.IdentityLinkedHashMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 
-import java.util.IdentityHashMap;
 import java.util.List;
 
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
@@ -95,6 +96,7 @@ import static com.facebook.presto.sql.relational.Signatures.arithmeticExpression
 import static com.facebook.presto.sql.relational.Signatures.arithmeticNegationSignature;
 import static com.facebook.presto.sql.relational.Signatures.arrayConstructorSignature;
 import static com.facebook.presto.sql.relational.Signatures.betweenSignature;
+import static com.facebook.presto.sql.relational.Signatures.bindSignature;
 import static com.facebook.presto.sql.relational.Signatures.castSignature;
 import static com.facebook.presto.sql.relational.Signatures.coalesceSignature;
 import static com.facebook.presto.sql.relational.Signatures.comparisonExpressionSignature;
@@ -116,10 +118,9 @@ import static com.facebook.presto.util.DateTimeUtils.parseTimeWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampWithTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.parseYearMonthInterval;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.facebook.presto.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.SliceUtf8.countCodePoints;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.util.Objects.requireNonNull;
@@ -131,7 +132,7 @@ public final class SqlToRowExpressionTranslator
     public static RowExpression translate(
             Expression expression,
             FunctionKind functionKind,
-            IdentityHashMap<Expression, Type> types,
+            IdentityLinkedHashMap<Expression, Type> types,
             FunctionRegistry functionRegistry,
             TypeManager typeManager,
             Session session,
@@ -153,11 +154,11 @@ public final class SqlToRowExpressionTranslator
             extends AstVisitor<RowExpression, Void>
     {
         private final FunctionKind functionKind;
-        private final IdentityHashMap<Expression, Type> types;
+        private final IdentityLinkedHashMap<Expression, Type> types;
         private final TypeManager typeManager;
         private final TimeZoneKey timeZoneKey;
 
-        private Visitor(FunctionKind functionKind, IdentityHashMap<Expression, Type> types, TypeManager typeManager, TimeZoneKey timeZoneKey)
+        private Visitor(FunctionKind functionKind, IdentityLinkedHashMap<Expression, Type> types, TypeManager typeManager, TimeZoneKey timeZoneKey)
         {
             this.functionKind = functionKind;
             this.types = types;
@@ -343,6 +344,19 @@ public final class SqlToRowExpressionTranslator
         }
 
         @Override
+        protected RowExpression visitBindExpression(BindExpression node, Void context)
+        {
+            RowExpression value = process(node.getValue(), context);
+            RowExpression function = process(node.getFunction(), context);
+
+            return call(
+                    bindSignature(types.get(node), value.getType(), function.getType()),
+                    types.get(node),
+                    value,
+                    function);
+        }
+
+        @Override
         protected RowExpression visitArithmeticBinary(ArithmeticBinaryExpression node, Void context)
         {
             RowExpression left = process(node.getLeft(), context);
@@ -424,13 +438,13 @@ public final class SqlToRowExpressionTranslator
             @Override
             public RowExpression visitInputReference(InputReferenceExpression reference, Void context)
             {
-                return new InputReferenceExpression(reference.getField(), targetType);
+                return field(reference.getField(), targetType);
             }
 
             @Override
             public RowExpression visitConstant(ConstantExpression literal, Void context)
             {
-                return new ConstantExpression(literal.getValue(), targetType);
+                return constant(literal.getValue(), targetType);
             }
 
             @Override
@@ -522,7 +536,7 @@ public final class SqlToRowExpressionTranslator
         @Override
         protected RowExpression visitDereferenceExpression(DereferenceExpression node, Void context)
         {
-            RowType rowType = checkType(types.get(node.getBase()), RowType.class, "type");
+            RowType rowType = (RowType) types.get(node.getBase());
             List<RowField> fields = rowType.getFields();
             int index = -1;
             for (int i = 0; i < fields.size(); i++) {

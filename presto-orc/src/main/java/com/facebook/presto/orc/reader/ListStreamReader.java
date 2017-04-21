@@ -16,15 +16,14 @@ package com.facebook.presto.orc.reader;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
-import com.facebook.presto.orc.stream.BooleanStream;
-import com.facebook.presto.orc.stream.LongStream;
-import com.facebook.presto.orc.stream.StreamSource;
-import com.facebook.presto.orc.stream.StreamSources;
+import com.facebook.presto.orc.stream.BooleanInputStream;
+import com.facebook.presto.orc.stream.InputStreamSource;
+import com.facebook.presto.orc.stream.InputStreamSources;
+import com.facebook.presto.orc.stream.LongInputStream;
 import com.facebook.presto.spi.block.ArrayBlock;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.Type;
-import com.google.common.primitives.Ints;
 import org.joda.time.DateTimeZone;
 
 import javax.annotation.Nonnull;
@@ -36,8 +35,9 @@ import java.util.List;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.reader.StreamReaders.createStreamReader;
-import static com.facebook.presto.orc.stream.MissingStreamSource.missingStreamSource;
+import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 public class ListStreamReader
@@ -51,14 +51,14 @@ public class ListStreamReader
     private int nextBatchSize;
 
     @Nonnull
-    private StreamSource<BooleanStream> presentStreamSource = missingStreamSource(BooleanStream.class);
+    private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
     @Nullable
-    private BooleanStream presentStream;
+    private BooleanInputStream presentStream;
 
     @Nonnull
-    private StreamSource<LongStream> lengthStreamSource = missingStreamSource(LongStream.class);
+    private InputStreamSource<LongInputStream> lengthStreamSource = missingStreamSource(LongInputStream.class);
     @Nullable
-    private LongStream lengthStream;
+    private LongInputStream lengthStream;
 
     private boolean rowGroupOpen;
 
@@ -94,7 +94,7 @@ public class ListStreamReader
                     throw new OrcCorruptionException("Value is not null but data stream is not present");
                 }
                 long elementSkipSize = lengthStream.sum(readOffset);
-                elementStreamReader.prepareNextRead(Ints.checkedCast(elementSkipSize));
+                elementStreamReader.prepareNextRead(toIntExact(elementSkipSize));
             }
         }
 
@@ -154,11 +154,11 @@ public class ListStreamReader
     }
 
     @Override
-    public void startStripe(StreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
             throws IOException
     {
-        presentStreamSource = missingStreamSource(BooleanStream.class);
-        lengthStreamSource = missingStreamSource(LongStream.class);
+        presentStreamSource = missingStreamSource(BooleanInputStream.class);
+        lengthStreamSource = missingStreamSource(LongInputStream.class);
 
         readOffset = 0;
         nextBatchSize = 0;
@@ -172,11 +172,11 @@ public class ListStreamReader
     }
 
     @Override
-    public void startRowGroup(StreamSources dataStreamSources)
+    public void startRowGroup(InputStreamSources dataStreamSources)
             throws IOException
     {
-        presentStreamSource = dataStreamSources.getStreamSource(streamDescriptor, PRESENT, BooleanStream.class);
-        lengthStreamSource = dataStreamSources.getStreamSource(streamDescriptor, LENGTH, LongStream.class);
+        presentStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, PRESENT, BooleanInputStream.class);
+        lengthStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, LENGTH, LongInputStream.class);
 
         readOffset = 0;
         nextBatchSize = 0;

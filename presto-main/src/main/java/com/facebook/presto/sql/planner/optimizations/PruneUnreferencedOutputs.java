@@ -24,6 +24,8 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
+import com.facebook.presto.sql.planner.plan.AssignUniqueId;
+import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExceptNode;
@@ -75,9 +77,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
 import static com.google.common.base.Predicates.in;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Sets.intersection;
 import static java.util.Objects.requireNonNull;
@@ -198,7 +200,24 @@ public class PruneUnreferencedOutputs
             PlanNode left = context.rewrite(node.getLeft(), leftInputs);
             PlanNode right = context.rewrite(node.getRight(), rightInputs);
 
-            return new JoinNode(node.getId(), node.getType(), left, right, node.getCriteria(), node.getFilter(), node.getLeftHashSymbol(), node.getRightHashSymbol());
+            List<Symbol> outputSymbols;
+            if (node.isCrossJoin()) {
+                // do not prune nested joins output since it is not supported
+                // TODO: remove this "if" branch when output symbols selection is supported by nested loop join
+                outputSymbols = ImmutableList.<Symbol>builder()
+                        .addAll(left.getOutputSymbols())
+                        .addAll(right.getOutputSymbols())
+                        .build();
+            }
+            else {
+                Set<Symbol> seenSymbol = new HashSet<>();
+                outputSymbols = node.getOutputSymbols().stream()
+                        .filter(context.get()::contains)
+                        .filter(seenSymbol::add)
+                        .collect(toImmutableList());
+            }
+
+            return new JoinNode(node.getId(), node.getType(), left, right, node.getCriteria(), outputSymbols, node.getFilter(), node.getLeftHashSymbol(), node.getRightHashSymbol(), node.getDistributionType());
         }
 
         @Override
@@ -228,7 +247,8 @@ public class PruneUnreferencedOutputs
                     node.getFilteringSourceJoinSymbol(),
                     node.getSemiJoinOutput(),
                     node.getSourceHashSymbol(),
-                    node.getFilteringSourceHashSymbol());
+                    node.getFilteringSourceHashSymbol(),
+                    node.getDistributionType());
         }
 
         @Override
@@ -482,7 +502,7 @@ public class PruneUnreferencedOutputs
         {
             ImmutableSet.Builder<Symbol> expectedInputs = ImmutableSet.builder();
 
-            ImmutableMap.Builder<Symbol, Expression> builder = ImmutableMap.builder();
+            Assignments.Builder builder = Assignments.builder();
             for (int i = 0; i < node.getOutputSymbols().size(); i++) {
                 Symbol output = node.getOutputSymbols().get(i);
                 Expression expression = node.getAssignments().get(output);
@@ -708,14 +728,14 @@ public class PruneUnreferencedOutputs
         public PlanNode visitApply(ApplyNode node, RewriteContext<Set<Symbol>> context)
         {
             // remove unused apply nodes
-            if (intersection(node.getSubqueryAssignments().keySet(), context.get()).isEmpty()) {
+            if (intersection(node.getSubqueryAssignments().getSymbols(), context.get()).isEmpty()) {
                 return context.rewrite(node.getInput(), context.get());
             }
 
             // extract symbols required subquery plan
             ImmutableSet.Builder<Symbol> subqueryAssignmentsSymbolsBuilder = ImmutableSet.builder();
-            ImmutableMap.Builder<Symbol, Expression> subqueryAssignments = ImmutableMap.builder();
-            for (Map.Entry<Symbol, Expression> entry : node.getSubqueryAssignments().entrySet()) {
+            Assignments.Builder subqueryAssignments = Assignments.builder();
+            for (Map.Entry<Symbol, Expression> entry : node.getSubqueryAssignments().getMap().entrySet()) {
                 Symbol output = entry.getKey();
                 Expression expression = entry.getValue();
                 if (context.get().contains(output)) {
@@ -740,6 +760,15 @@ public class PruneUnreferencedOutputs
                     .build();
             PlanNode input = context.rewrite(node.getInput(), inputContext);
             return new ApplyNode(node.getId(), input, subquery, subqueryAssignments.build(), newCorrelation);
+        }
+
+        @Override
+        public PlanNode visitAssignUniqueId(AssignUniqueId node, RewriteContext<Set<Symbol>> context)
+        {
+            if (!context.get().contains(node.getIdColumn())) {
+                return context.rewrite(node.getSource(), context.get());
+            }
+            return context.defaultRewrite(node, context.get());
         }
     }
 }

@@ -33,6 +33,7 @@ import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.TableIdentity;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.Privilege;
 import io.airlift.slice.Slice;
 
@@ -242,10 +243,21 @@ public interface ConnectorMetadata
     /**
      * Finish a table creation with data after the data is written.
      */
-    default void finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    default Optional<ConnectorOutputMetadata> finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
     {
         throw new PrestoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata beginCreateTable() is implemented without finishCreateTable()");
     }
+
+    /**
+     * Start a SELECT/UPDATE/INSERT/DELETE query. This notification is triggered after the planning phase completes.
+     */
+    default void beginQuery(ConnectorSession session) {}
+
+    /**
+     * Cleanup after a SELECT/UPDATE/INSERT/DELETE query. This is the very last notification after the query finishes, whether it succeeds or fails.
+     * An exception thrown in this method will not affect the result of the query.
+     */
+    default void cleanupQuery(ConnectorSession session) {}
 
     /**
      * Begin insert query
@@ -258,7 +270,7 @@ public interface ConnectorMetadata
     /**
      * Finish insert query
      */
-    default void finishInsert(ConnectorSession session, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments)
+    default Optional<ConnectorOutputMetadata> finishInsert(ConnectorSession session, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments)
     {
         throw new PrestoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata beginInsert() is implemented without finishInsert()");
     }
@@ -363,6 +375,14 @@ public interface ConnectorMetadata
     default void revokeTablePrivileges(ConnectorSession session, SchemaTableName tableName, Set<Privilege> privileges, String grantee, boolean grantOption)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support revokes");
+    }
+
+    /**
+     * List the table privileges granted to the specified grantee for the tables that have the specified prefix
+     */
+    default List<GrantInfo> listTablePrivileges(ConnectorSession session, SchemaTablePrefix prefix)
+    {
+        return emptyList();
     }
 
     /**

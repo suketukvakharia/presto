@@ -14,15 +14,16 @@
 package com.facebook.presto.cassandra;
 
 import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ProtocolVersion;
 import com.datastax.driver.core.QueryOptions;
 import com.datastax.driver.core.SocketOptions;
+import com.datastax.driver.core.policies.ConstantSpeculativeExecutionPolicy;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.policies.ExponentialReconnectionPolicy;
 import com.datastax.driver.core.policies.LoadBalancingPolicy;
 import com.datastax.driver.core.policies.RoundRobinPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
 import com.datastax.driver.core.policies.WhiteListPolicy;
-import com.google.common.primitives.Ints;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Provides;
@@ -40,6 +41,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newFixedThreadPool;
 import static org.weakref.jmx.ObjectNames.generatedNameOf;
@@ -67,11 +69,7 @@ public class CassandraClientModule
         binder.bind(CassandraConnectorRecordSinkProvider.class).in(Scopes.SINGLETON);
         binder.bind(CassandraPartitionManager.class).in(Scopes.SINGLETON);
 
-        binder.bind(CassandraThriftConnectionFactory.class).in(Scopes.SINGLETON);
-
         configBinder(binder).bindConfig(CassandraClientConfig.class);
-
-        binder.bind(CassandraThriftConnectionFactory.class).in(Scopes.SINGLETON);
 
         binder.bind(CachingCassandraSchemaProvider.class).in(Scopes.SINGLETON);
         newExporter(binder).export(CachingCassandraSchemaProvider.class).as(generatedNameOf(CachingCassandraSchemaProvider.class, connectorId));
@@ -99,11 +97,12 @@ public class CassandraClientModule
         requireNonNull(config, "config is null");
         requireNonNull(extraColumnMetadataCodec, "extraColumnMetadataCodec is null");
 
-        Cluster.Builder clusterBuilder = Cluster.builder();
+        Cluster.Builder clusterBuilder = Cluster.builder()
+                .withProtocolVersion(ProtocolVersion.V3);
 
         List<String> contactPoints = requireNonNull(config.getContactPoints(), "contactPoints is null");
         checkArgument(!contactPoints.isEmpty(), "empty contactPoints");
-
+        contactPoints.forEach(clusterBuilder::addContactPoint);
         clusterBuilder.withPort(config.getNativeProtocolPort());
         clusterBuilder.withReconnectionPolicy(new ExponentialReconnectionPolicy(500, 10000));
         clusterBuilder.withRetryPolicy(config.getRetryPolicy().getPolicy());
@@ -139,8 +138,8 @@ public class CassandraClientModule
         clusterBuilder.withLoadBalancingPolicy(loadPolicy);
 
         SocketOptions socketOptions = new SocketOptions();
-        socketOptions.setReadTimeoutMillis(Ints.checkedCast(config.getClientReadTimeout().toMillis()));
-        socketOptions.setConnectTimeoutMillis(Ints.checkedCast(config.getClientConnectTimeout().toMillis()));
+        socketOptions.setReadTimeoutMillis(toIntExact(config.getClientReadTimeout().toMillis()));
+        socketOptions.setConnectTimeoutMillis(toIntExact(config.getClientConnectTimeout().toMillis()));
         if (config.getClientSoLinger() != null) {
             socketOptions.setSoLinger(config.getClientSoLinger());
         }
@@ -155,13 +154,13 @@ public class CassandraClientModule
         options.setConsistencyLevel(config.getConsistencyLevel());
         clusterBuilder.withQueryOptions(options);
 
-        return new CassandraSession(
-                connectorId.toString(),
-                contactPoints,
-                clusterBuilder,
-                config.getFetchSizeForPartitionKeySelect(),
-                config.getLimitForPartitionKeySelect(),
-                extraColumnMetadataCodec,
-                config.getNoHostAvailableRetryCount());
+        if (config.getSpeculativeExecutionLimit() > 1) {
+            clusterBuilder.withSpeculativeExecutionPolicy(new ConstantSpeculativeExecutionPolicy(
+                    config.getSpeculativeExecutionDelay().toMillis(), // delay before a new execution is launched
+                    config.getSpeculativeExecutionLimit()    // maximum number of executions
+            ));
+        }
+
+        return new NativeCassandraSession(connectorId.toString(), extraColumnMetadataCodec, clusterBuilder.build(), config.getNoHostAvailableRetryTimeout());
     }
 }

@@ -20,31 +20,31 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import io.airlift.concurrent.MoreFutures;
 
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import static com.facebook.presto.operator.OuterLookupSource.createOuterLookupSourceSupplier;
 import static com.facebook.presto.operator.PartitionedLookupSource.createPartitionedLookupSourceSupplier;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.util.concurrent.Futures.nonCancellationPropagating;
 import static java.util.Objects.requireNonNull;
 
 public final class PartitionedLookupSourceFactory
         implements LookupSourceFactory
 {
     private final List<Type> types;
+    private final List<Type> outputTypes;
     private final Map<Symbol, Integer> layout;
     private final List<Type> hashChannelTypes;
     private final Supplier<LookupSource>[] partitions;
     private final boolean outer;
-    private final CompletableFuture<?> destroyed = new CompletableFuture<>();
+    private final SettableFuture<?> destroyed = SettableFuture.create();
 
     @GuardedBy("this")
     private int partitionsSet;
@@ -55,9 +55,10 @@ public final class PartitionedLookupSourceFactory
     @GuardedBy("this")
     private final List<SettableFuture<LookupSource>> lookupSourceFutures = new ArrayList<>();
 
-    public PartitionedLookupSourceFactory(List<Type> types, List<Integer> hashChannels, int partitionCount, Map<Symbol, Integer> layout, boolean outer)
+    public PartitionedLookupSourceFactory(List<Type> types, List<Type> outputTypes, List<Integer> hashChannels, int partitionCount, Map<Symbol, Integer> layout, boolean outer)
     {
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+        this.outputTypes = ImmutableList.copyOf(requireNonNull(outputTypes, "outputTypes is null"));
         this.layout = ImmutableMap.copyOf(layout);
         this.partitions = (Supplier<LookupSource>[]) new Supplier<?>[partitionCount];
         this.outer = outer;
@@ -71,6 +72,12 @@ public final class PartitionedLookupSourceFactory
     public List<Type> getTypes()
     {
         return types;
+    }
+
+    @Override
+    public List<Type> getOutputTypes()
+    {
+        return outputTypes;
     }
 
     @Override
@@ -134,11 +141,11 @@ public final class PartitionedLookupSourceFactory
     @Override
     public void destroy()
     {
-        destroyed.complete(null);
+        destroyed.set(null);
     }
 
-    public CompletableFuture<?> isDestroyed()
+    public ListenableFuture<?> isDestroyed()
     {
-        return MoreFutures.unmodifiableFuture(destroyed);
+        return nonCancellationPropagating(destroyed);
     }
 }

@@ -23,9 +23,9 @@ import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlanFragmenter;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.PlanOptimizers;
-import com.facebook.presto.sql.planner.PlanPrinter;
 import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
+import com.facebook.presto.sql.planner.planPrinter.PlanPrinter;
 import com.facebook.presto.sql.tree.ExplainType.Type;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.Statement;
@@ -76,6 +76,12 @@ public class QueryExplainer
         this.dataDefinitionTask = ImmutableMap.copyOf(requireNonNull(dataDefinitionTask, "dataDefinitionTask is null"));
     }
 
+    public Analysis analyze(Session session, Statement statement, List<Expression> parameters)
+    {
+        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(this), parameters);
+        return analyzer.analyze(statement);
+    }
+
     public String getPlan(Session session, Statement statement, Type planType, List<Expression> parameters)
     {
         DataDefinitionTask<?> task = dataDefinitionTask.get(statement.getClass());
@@ -121,9 +127,8 @@ public class QueryExplainer
     private Plan getLogicalPlan(Session session, Statement statement, List<Expression> parameters)
     {
         // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(this), parameters);
+        Analysis analysis = analyze(session, statement, parameters);
 
-        Analysis analysis = analyzer.analyze(statement);
         PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
 
         // plan statement
@@ -133,16 +138,7 @@ public class QueryExplainer
 
     private SubPlan getDistributedPlan(Session session, Statement statement, List<Expression> parameters)
     {
-        // analyze statement
-        Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(this), parameters);
-
-        Analysis analysis = analyzer.analyze(statement);
-        PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
-
-        // plan statement
-        LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, sqlParser);
-        Plan plan = logicalPlanner.plan(analysis);
-
+        Plan plan = getLogicalPlan(session, statement, parameters);
         return PlanFragmenter.createSubPlans(session, metadata, plan);
     }
 }

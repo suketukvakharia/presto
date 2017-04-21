@@ -30,7 +30,9 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.Float.intBitsToFloat;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
@@ -43,7 +45,6 @@ public class CassandraRecordSink
     private final CassandraSession cassandraSession;
     private final String insertQuery;
     private final List<Object> values;
-    private final String schemaName;
     private final List<Type> columnTypes;
     private int field = -1;
 
@@ -53,7 +54,7 @@ public class CassandraRecordSink
         this.fieldCount = requireNonNull(handle, "handle is null").getColumnNames().size();
         this.cassandraSession = requireNonNull(cassandraSession, "cassandraSession is null");
 
-        schemaName = handle.getSchemaName();
+        String schemaName = handle.getSchemaName();
         StringBuilder queryBuilder = new StringBuilder(String.format("INSERT INTO \"%s\".\"%s\"(", schemaName, handle.getTableName()));
         queryBuilder.append("id");
 
@@ -89,7 +90,7 @@ public class CassandraRecordSink
         checkState(field != -1, "not in record");
         checkState(field == fieldCount, "not all fields set");
         field = -1;
-        cassandraSession.execute(schemaName, insertQuery, values.toArray());
+        cassandraSession.execute(insertQuery, values.toArray());
     }
 
     @Override
@@ -112,6 +113,9 @@ public class CassandraRecordSink
         }
         else if (INTEGER.equals(columnTypes.get(field))) {
             append(((Number) value).intValue());
+        }
+        else if (REAL.equals(columnTypes.get(field))) {
+            append(intBitsToFloat((int) value));
         }
         else {
             append(value);

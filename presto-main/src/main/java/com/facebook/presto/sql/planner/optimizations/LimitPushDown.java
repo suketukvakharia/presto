@@ -129,6 +129,7 @@ public class LimitPushDown
         }
 
         @Override
+        @Deprecated
         public PlanNode visitAggregation(AggregationNode node, RewriteContext<LimitContext> context)
         {
             LimitContext limit = context.get();
@@ -182,6 +183,7 @@ public class LimitPushDown
         }
 
         @Override
+        @Deprecated
         public PlanNode visitSort(SortNode node, RewriteContext<LimitContext> context)
         {
             LimitContext limit = context.get();
@@ -223,7 +225,16 @@ public class LimitPushDown
         {
             PlanNode source = context.rewrite(node.getSource(), context.get());
             if (source != node.getSource()) {
-                return new SemiJoinNode(node.getId(), source, node.getFilteringSource(), node.getSourceJoinSymbol(), node.getFilteringSourceJoinSymbol(), node.getSemiJoinOutput(), node.getSourceHashSymbol(), node.getFilteringSourceHashSymbol());
+                return new SemiJoinNode(
+                        node.getId(),
+                        source,
+                        node.getFilteringSource(),
+                        node.getSourceJoinSymbol(),
+                        node.getFilteringSourceJoinSymbol(),
+                        node.getSemiJoinOutput(),
+                        node.getSourceHashSymbol(),
+                        node.getFilteringSourceHashSymbol(),
+                        node.getDistributionType());
             }
             return node;
         }

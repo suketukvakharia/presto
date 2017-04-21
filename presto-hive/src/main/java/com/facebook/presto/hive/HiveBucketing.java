@@ -24,7 +24,6 @@ import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import com.google.common.primitives.Ints;
 import com.google.common.primitives.Shorts;
 import com.google.common.primitives.SignedBytes;
 import io.airlift.log.Logger;
@@ -53,12 +52,12 @@ import static com.facebook.presto.hive.HiveColumnHandle.BUCKET_COLUMN_NAME;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static com.facebook.presto.hive.HiveUtil.getRegularColumnHandles;
 import static com.facebook.presto.hive.HiveUtil.getTableStructFields;
-import static com.facebook.presto.hive.util.Types.checkType;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Maps.immutableEntry;
 import static com.google.common.collect.Sets.immutableEnumSet;
 import static java.lang.Double.doubleToLongBits;
+import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Map.Entry;
 import static java.util.Objects.requireNonNull;
@@ -128,7 +127,7 @@ final class HiveBucketing
                     case SHORT:
                         return Shorts.checkedCast(prestoType.getLong(block, position));
                     case INT:
-                        return Ints.checkedCast(prestoType.getLong(block, position));
+                        return toIntExact(prestoType.getLong(block, position));
                     case LONG:
                         long bigintValue = prestoType.getLong(block, position);
                         return (int) ((bigintValue >>> 32) ^ bigintValue);
@@ -144,7 +143,7 @@ final class HiveBucketing
                     case DATE:
                         // day offset from 1970-01-01
                         long days = prestoType.getLong(block, position);
-                        return Ints.checkedCast(days);
+                        return toIntExact(days);
                     case TIMESTAMP:
                         long millisSinceEpoch = prestoType.getLong(block, position);
                         // seconds << 30 + nanoseconds
@@ -313,7 +312,7 @@ final class HiveBucketing
             }
 
             ObjectInspector udfInspector = udf.initialize(objectInspectors);
-            IntObjectInspector inspector = checkType(udfInspector, IntObjectInspector.class, "udfInspector");
+            IntObjectInspector inspector = (IntObjectInspector) udfInspector;
 
             Object result = udf.evaluate(deferredObjects);
             HiveKey hiveKey = new HiveKey();

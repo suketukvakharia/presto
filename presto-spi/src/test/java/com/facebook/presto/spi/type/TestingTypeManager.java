@@ -15,6 +15,7 @@ package com.facebook.presto.spi.type;
 
 import com.google.common.collect.ImmutableList;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -55,9 +56,9 @@ public class TestingTypeManager
     }
 
     @Override
-    public Optional<Type> getCommonSuperType(List<? extends Type> types)
+    public Collection<ParametricType> getParametricTypes()
     {
-        throw new UnsupportedOperationException();
+        return ImmutableList.of();
     }
 
     @Override

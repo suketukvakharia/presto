@@ -46,6 +46,7 @@ public class MongoClientConfig
     private int connectionTimeout = 10_000;
     private int socketTimeout = 0;
     private boolean socketKeepAlive = false;
+    private boolean sslEnabled = false;
 
     // query configurations
     private int cursorBatchSize = 0; // use driver default
@@ -102,7 +103,7 @@ public class MongoClientConfig
         return this;
     }
 
-    public MongoClientConfig setCredentils(String... credentials)
+    public MongoClientConfig setCredentials(String... credentials)
     {
         this.credentials = buildCredentials(Arrays.asList(credentials));
         return this;
@@ -274,6 +275,18 @@ public class MongoClientConfig
     public MongoClientConfig setImplicitRowFieldPrefix(String implicitRowFieldPrefix)
     {
         this.implicitRowFieldPrefix = implicitRowFieldPrefix;
+        return this;
+    }
+
+    public boolean getSslEnabled()
+    {
+        return this.sslEnabled;
+    }
+
+    @Config("mongodb.ssl.enabled")
+    public MongoClientConfig setSslEnabled(boolean sslEnabled)
+    {
+        this.sslEnabled = sslEnabled;
         return this;
     }
 }

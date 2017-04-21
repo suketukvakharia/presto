@@ -15,12 +15,12 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
-import com.google.common.primitives.Ints;
 
 import javax.annotation.Nullable;
 
 import java.util.Optional;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 // This implementation assumes arrays used in the hash are always a power of 2
@@ -30,14 +30,17 @@ public final class JoinHash
     private final PagesHash pagesHash;
 
     // we unwrap Optional<JoinFilterFunction> to actual verifier or null in constructor for performance reasons
-    // we do quick check for `filterFunction == null` in `getNextJoinPositionFrom` to avoid calls to applyFilterFunction
+    // we do quick check for `filterFunction == null` in `isJoinPositionEligible` to avoid calls to applyFilterFunction
     @Nullable
     private final JoinFilterFunction filterFunction;
 
-    public JoinHash(PagesHash pagesHash, Optional<JoinFilterFunction> filterFunction)
+    private final PositionLinks positionLinks;
+
+    public JoinHash(PagesHash pagesHash, Optional<JoinFilterFunction> filterFunction, PositionLinks positionLinks)
     {
         this.pagesHash = requireNonNull(pagesHash, "pagesHash is null");
         this.filterFunction = requireNonNull(filterFunction, "filterFunction can not be null").orElse(null);
+        this.positionLinks = requireNonNull(positionLinks, "positionLinks is null");
     }
 
     @Override
@@ -55,47 +58,51 @@ public final class JoinHash
     @Override
     public long getInMemorySizeInBytes()
     {
-        return pagesHash.getInMemorySizeInBytes();
+        return pagesHash.getInMemorySizeInBytes() + positionLinks.getSizeInBytes();
     }
 
     @Override
     public long getJoinPosition(int position, Page hashChannelsPage, Page allChannelsPage)
     {
         int addressIndex = pagesHash.getAddressIndex(position, hashChannelsPage, allChannelsPage);
-        if (addressIndex == -1) {
-            return -1;
-        }
-        return getNextJoinPositionFrom(addressIndex, position, allChannelsPage);
+        return startJoinPosition(addressIndex, position, allChannelsPage);
     }
 
     @Override
     public long getJoinPosition(int position, Page hashChannelsPage, Page allChannelsPage, long rawHash)
     {
         int addressIndex = pagesHash.getAddressIndex(position, hashChannelsPage, allChannelsPage, rawHash);
-        if (addressIndex == -1) {
+        return startJoinPosition(addressIndex, position, allChannelsPage);
+    }
+
+    private long startJoinPosition(int currentJoinPosition, int probePosition, Page allProbeChannelsPage)
+    {
+        if (currentJoinPosition == -1) {
             return -1;
         }
-        return getNextJoinPositionFrom(addressIndex, position, allChannelsPage);
+        return positionLinks.start(currentJoinPosition, probePosition, allProbeChannelsPage);
     }
 
     @Override
     public final long getNextJoinPosition(long currentJoinPosition, int probePosition, Page allProbeChannelsPage)
     {
-        int nextAddressIndex = pagesHash.getNextAddressIndex(Ints.checkedCast(currentJoinPosition));
-        return getNextJoinPositionFrom(nextAddressIndex, probePosition, allProbeChannelsPage);
+        return positionLinks.next(toIntExact(currentJoinPosition), probePosition, allProbeChannelsPage);
     }
 
-    private int getNextJoinPositionFrom(int currentJoinPosition, int probePosition, Page allProbeChannelsPage)
+    @Override
+    public boolean isJoinPositionEligible(long currentJoinPosition, int probePosition, Page allProbeChannelsPage)
     {
-        while (filterFunction != null && currentJoinPosition != -1 && !filterFunction.filter((currentJoinPosition), probePosition, allProbeChannelsPage)) {
-            currentJoinPosition = pagesHash.getNextAddressIndex(currentJoinPosition);
-        }
-        return currentJoinPosition;
+        return filterFunction == null || filterFunction.filter(toIntExact(currentJoinPosition), probePosition, allProbeChannelsPage);
     }
 
     @Override
     public void appendTo(long position, PageBuilder pageBuilder, int outputChannelOffset)
     {
-        pagesHash.appendTo(Ints.checkedCast(position), pageBuilder, outputChannelOffset);
+        pagesHash.appendTo(toIntExact(position), pageBuilder, outputChannelOffset);
+    }
+
+    @Override
+    public void close()
+    {
     }
 }

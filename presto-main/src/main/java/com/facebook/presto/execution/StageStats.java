@@ -14,9 +14,11 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.operator.BlockedReason;
+import com.facebook.presto.operator.OperatorStats;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.stats.Distribution.DistributionSnapshot;
 import io.airlift.units.DataSize;
@@ -25,6 +27,7 @@ import org.joda.time.DateTime;
 
 import javax.annotation.concurrent.Immutable;
 
+import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -65,8 +68,10 @@ public class StageStats
     private final DataSize processedInputDataSize;
     private final long processedInputPositions;
 
+    private final DataSize bufferedDataSize;
     private final DataSize outputDataSize;
     private final long outputPositions;
+    private final List<OperatorStats> operatorSummaries;
 
     @VisibleForTesting
     public StageStats()
@@ -95,8 +100,10 @@ public class StageStats
         this.rawInputPositions = 0;
         this.processedInputDataSize = null;
         this.processedInputPositions = 0;
+        this.bufferedDataSize = null;
         this.outputDataSize = null;
         this.outputPositions = 0;
+        this.operatorSummaries = null;
     }
 
     @JsonCreator
@@ -133,8 +140,10 @@ public class StageStats
             @JsonProperty("processedInputDataSize") DataSize processedInputDataSize,
             @JsonProperty("processedInputPositions") long processedInputPositions,
 
+            @JsonProperty("bufferedDataSize") DataSize bufferedDataSize,
             @JsonProperty("outputDataSize") DataSize outputDataSize,
-            @JsonProperty("outputPositions") long outputPositions)
+            @JsonProperty("outputPositions") long outputPositions,
+            @JsonProperty("operatorSummaries") List<OperatorStats> operatorSummaries)
     {
         this.schedulingComplete = schedulingComplete;
         this.getSplitDistribution = requireNonNull(getSplitDistribution, "getSplitDistribution is null");
@@ -176,9 +185,11 @@ public class StageStats
         checkArgument(processedInputPositions >= 0, "processedInputPositions is negative");
         this.processedInputPositions = processedInputPositions;
 
+        this.bufferedDataSize = requireNonNull(bufferedDataSize, "bufferedDataSize is null");
         this.outputDataSize = requireNonNull(outputDataSize, "outputDataSize is null");
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
+        this.operatorSummaries = ImmutableList.copyOf(requireNonNull(operatorSummaries, "operatorSummaries is null"));
     }
 
     @JsonProperty
@@ -326,6 +337,12 @@ public class StageStats
     }
 
     @JsonProperty
+    public DataSize getBufferedDataSize()
+    {
+        return bufferedDataSize;
+    }
+
+    @JsonProperty
     public DataSize getOutputDataSize()
     {
         return outputDataSize;
@@ -335,5 +352,11 @@ public class StageStats
     public long getOutputPositions()
     {
         return outputPositions;
+    }
+
+    @JsonProperty
+    public List<OperatorStats> getOperatorSummaries()
+    {
+        return operatorSummaries;
     }
 }

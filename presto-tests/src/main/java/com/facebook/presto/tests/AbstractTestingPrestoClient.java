@@ -43,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.transaction.TransactionBuilder.transaction;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static java.util.Objects.requireNonNull;
@@ -109,7 +110,7 @@ public abstract class AbstractTestingPrestoClient<T>
             }
 
             QueryError error = client.finalResults().getError();
-            assert error != null;
+            verify(error != null, "no error");
             if (error.getFailureInfo() != null) {
                 throw error.getFailureInfo().toException();
             }
@@ -135,6 +136,7 @@ public abstract class AbstractTestingPrestoClient<T>
                 server,
                 session.getIdentity().getUser(),
                 session.getSource().orElse(null),
+                session.getClientInfo().orElse(null),
                 session.getCatalog().orElse(null),
                 session.getSchema().orElse(null),
                 session.getTimeZoneKey().getId(),

@@ -128,6 +128,12 @@ public class TestSourcePartitionedScheduler
 
         ScheduleResult scheduleResult = scheduler.schedule();
 
+        assertFalse(scheduleResult.isFinished());
+        assertTrue(scheduleResult.getBlocked().isDone());
+        assertEquals(scheduleResult.getNewTasks().size(), 1);
+
+        scheduleResult = scheduler.schedule();
+
         assertTrue(scheduleResult.isFinished());
         assertTrue(scheduleResult.getBlocked().isDone());
         assertTrue(scheduleResult.getNewTasks().isEmpty());
@@ -425,23 +431,31 @@ public class TestSourcePartitionedScheduler
 
         // table scan with splitCount splits
         PlanNodeId tableScanNodeId = new PlanNodeId("plan_id");
+        TableScanNode tableScan = new TableScanNode(
+                tableScanNodeId,
+                new TableHandle(CONNECTOR_ID, new TestingTableHandle()),
+                ImmutableList.of(symbol),
+                ImmutableMap.of(symbol, new TestingColumnHandle("column")),
+                Optional.empty(),
+                TupleDomain.all(),
+                null);
+
+        RemoteSourceNode remote = new RemoteSourceNode(new PlanNodeId("remote_id"), new PlanFragmentId("plan_fragment_id"), ImmutableList.of());
         PlanFragment testFragment = new PlanFragment(
                 new PlanFragmentId("plan_id"),
                 new JoinNode(new PlanNodeId("join_id"),
                         INNER,
-                        new TableScanNode(
-                                tableScanNodeId,
-                                new TableHandle(CONNECTOR_ID, new TestingTableHandle()),
-                                ImmutableList.of(symbol),
-                                ImmutableMap.of(symbol, new TestingColumnHandle("column")),
-                                Optional.empty(),
-                                TupleDomain.all(),
-                                null),
-                        new RemoteSourceNode(new PlanNodeId("remote_id"), new PlanFragmentId("plan_fragment_id"), ImmutableList.of()),
+                        tableScan,
+                        remote,
                         ImmutableList.of(),
+                        ImmutableList.<Symbol>builder()
+                                .addAll(tableScan.getOutputSymbols())
+                                .addAll(remote.getOutputSymbols())
+                                .build(),
                         Optional.empty(),
                         Optional.empty(),
-                        Optional.empty()),
+                        Optional.empty(),
+                        Optional.of(JoinNode.DistributionType.PARTITIONED)),
                 ImmutableMap.of(symbol, VARCHAR),
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(tableScanNodeId),
@@ -473,7 +487,8 @@ public class TestSourcePartitionedScheduler
                 TEST_SESSION,
                 true,
                 nodeTaskMap,
-                executor);
+                executor,
+                new SplitSchedulerStats());
 
         stage.setOutputBuffers(createInitialEmptyOutputBuffers(PARTITIONED)
                 .withBuffer(OUT, 0)

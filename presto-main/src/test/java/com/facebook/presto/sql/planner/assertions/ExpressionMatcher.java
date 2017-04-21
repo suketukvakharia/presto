@@ -28,12 +28,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.sql.ExpressionUtils.rewriteQualifiedNamesToSymbolReferences;
+import static com.facebook.presto.sql.ExpressionUtils.rewriteIdentifiersToSymbolReferences;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
 public class ExpressionMatcher
-    implements RvalueMatcher
+        implements RvalueMatcher
 {
     private final String sql;
     private final Expression expression;
@@ -47,7 +47,7 @@ public class ExpressionMatcher
     private Expression expression(String sql)
     {
         SqlParser parser = new SqlParser();
-        return rewriteQualifiedNamesToSymbolReferences(parser.createExpression(sql));
+        return rewriteIdentifiersToSymbolReferences(parser.createExpression(sql));
     }
 
     @Override
@@ -80,11 +80,11 @@ public class ExpressionMatcher
     {
         if (node instanceof ProjectNode) {
             ProjectNode projectNode = (ProjectNode) node;
-            return projectNode.getAssignments();
+            return projectNode.getAssignments().getMap();
         }
         else if (node instanceof ApplyNode) {
             ApplyNode applyNode = (ApplyNode) node;
-            return applyNode.getSubqueryAssignments();
+            return applyNode.getSubqueryAssignments().getMap();
         }
         else {
             return null;

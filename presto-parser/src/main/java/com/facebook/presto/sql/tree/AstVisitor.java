@@ -17,6 +17,11 @@ import javax.annotation.Nullable;
 
 public abstract class AstVisitor<R, C>
 {
+    public R process(Node node)
+    {
+        return process(node, null);
+    }
+
     public R process(Node node, @Nullable C context)
     {
         return node.accept(this, context);
@@ -212,6 +217,11 @@ public abstract class AstVisitor<R, C>
         return visitRelation(node, context);
     }
 
+    protected R visitOrderBy(OrderBy node, C context)
+    {
+        return visitNode(node, context);
+    }
+
     protected R visitQuerySpecification(QuerySpecification node, C context)
     {
         return visitQueryBody(node, context);
@@ -297,7 +307,7 @@ public abstract class AstVisitor<R, C>
         return visitExpression(node, context);
     }
 
-    protected R visitQualifiedNameReference(QualifiedNameReference node, C context)
+    protected R visitIdentifier(Identifier node, C context)
     {
         return visitExpression(node, context);
     }
@@ -582,6 +592,11 @@ public abstract class AstVisitor<R, C>
         return visitStatement(node, context);
     }
 
+    protected R visitShowGrants(ShowGrants node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
     protected R visitTransactionMode(TransactionMode node, C context)
     {
         return visitNode(node, context);
@@ -653,6 +668,11 @@ public abstract class AstVisitor<R, C>
     }
 
     protected R visitLambdaArgumentDeclaration(LambdaArgumentDeclaration node, C context)
+    {
+        return visitExpression(node, context);
+    }
+
+    protected R visitBindExpression(BindExpression node, C context)
     {
         return visitExpression(node, context);
     }

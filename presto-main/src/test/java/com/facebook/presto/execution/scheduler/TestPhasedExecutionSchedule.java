@@ -44,9 +44,11 @@ import java.util.stream.Stream;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
+import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.PARTITIONED;
+import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.REPLICATED;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.RIGHT;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static org.testng.Assert.assertEquals;
 
 public class TestPhasedExecutionSchedule
@@ -188,30 +190,43 @@ public class TestPhasedExecutionSchedule
                 TupleDomain.all(),
                 null);
 
+        RemoteSourceNode remote = new RemoteSourceNode(new PlanNodeId("build_id"), buildFragment.getId(), ImmutableList.of());
         PlanNode join = new JoinNode(
                 new PlanNodeId(name + "_id"),
                 INNER,
                 tableScan,
-                new RemoteSourceNode(new PlanNodeId("build_id"), buildFragment.getId(), ImmutableList.of()),
+                remote,
                 ImmutableList.of(),
+                ImmutableList.<Symbol>builder()
+                        .addAll(tableScan.getOutputSymbols())
+                        .addAll(remote.getOutputSymbols())
+                        .build(),
                 Optional.empty(),
                 Optional.empty(),
-                Optional.empty());
+                Optional.empty(),
+                Optional.of(REPLICATED));
 
         return createFragment(join);
     }
 
     private static PlanFragment createJoinPlanFragment(JoinNode.Type joinType, String name, PlanFragment buildFragment, PlanFragment probeFragment)
     {
+        RemoteSourceNode probe = new RemoteSourceNode(new PlanNodeId("probe_id"), probeFragment.getId(), ImmutableList.of());
+        RemoteSourceNode build = new RemoteSourceNode(new PlanNodeId("build_id"), buildFragment.getId(), ImmutableList.of());
         PlanNode planNode = new JoinNode(
                 new PlanNodeId(name + "_id"),
                 joinType,
-                new RemoteSourceNode(new PlanNodeId("probe_id"), probeFragment.getId(), ImmutableList.of()),
-                new RemoteSourceNode(new PlanNodeId("build_id"), buildFragment.getId(), ImmutableList.of()),
+                probe,
+                build,
                 ImmutableList.of(),
+                ImmutableList.<Symbol>builder()
+                        .addAll(probe.getOutputSymbols())
+                        .addAll(build.getOutputSymbols())
+                        .build(),
                 Optional.empty(),
                 Optional.empty(),
-                Optional.empty());
+                Optional.empty(),
+                Optional.of(PARTITIONED));
 
         return createFragment(planNode);
     }

@@ -53,7 +53,6 @@ import java.util.Set;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
-import static com.facebook.presto.tpch.Types.checkType;
 import static java.util.Objects.requireNonNull;
 
 public class TpchMetadata
@@ -69,8 +68,14 @@ public class TpchMetadata
 
     private final String connectorId;
     private final Set<String> tableNames;
+    private final ColumnNaming columnNaming;
 
     public TpchMetadata(String connectorId)
+    {
+        this(connectorId, ColumnNaming.SIMPLIFIED);
+    }
+
+    public TpchMetadata(String connectorId, ColumnNaming columnNaming)
     {
         ImmutableSet.Builder<String> tableNames = ImmutableSet.builder();
         for (TpchTable<?> tpchTable : TpchTable.getTables()) {
@@ -78,6 +83,7 @@ public class TpchMetadata
         }
         this.tableNames = tableNames.build();
         this.connectorId = connectorId;
+        this.columnNaming = columnNaming;
     }
 
     @Override
@@ -110,7 +116,7 @@ public class TpchMetadata
             Constraint<ColumnHandle> constraint,
             Optional<Set<ColumnHandle>> desiredColumns)
     {
-        TpchTableHandle tableHandle = checkType(table, TpchTableHandle.class, "table");
+        TpchTableHandle tableHandle = (TpchTableHandle) table;
 
         Optional<ConnectorNodePartitioning> nodePartition = Optional.empty();
         Optional<Set<ColumnHandle>> partitioningColumns = Optional.empty();
@@ -118,7 +124,7 @@ public class TpchMetadata
 
         Map<String, ColumnHandle> columns = getColumnHandles(session, tableHandle);
         if (tableHandle.getTableName().equals(TpchTable.ORDERS.getTableName())) {
-            ColumnHandle orderKeyColumn = columns.get(OrderColumn.ORDER_KEY.getColumnName());
+            ColumnHandle orderKeyColumn = columns.get(columnNaming.getName(OrderColumn.ORDER_KEY));
             nodePartition = Optional.of(new ConnectorNodePartitioning(
                     new TpchPartitioningHandle(
                             TpchTable.ORDERS.getTableName(),
@@ -128,7 +134,7 @@ public class TpchMetadata
             localProperties = ImmutableList.of(new SortingProperty<>(orderKeyColumn, SortOrder.ASC_NULLS_FIRST));
         }
         else if (tableHandle.getTableName().equals(TpchTable.LINE_ITEM.getTableName())) {
-            ColumnHandle orderKeyColumn = columns.get(OrderColumn.ORDER_KEY.getColumnName());
+            ColumnHandle orderKeyColumn = columns.get(columnNaming.getName(LineItemColumn.ORDER_KEY));
             nodePartition = Optional.of(new ConnectorNodePartitioning(
                     new TpchPartitioningHandle(
                             TpchTable.ORDERS.getTableName(),
@@ -137,7 +143,7 @@ public class TpchMetadata
             partitioningColumns = Optional.of(ImmutableSet.of(orderKeyColumn));
             localProperties = ImmutableList.of(
                     new SortingProperty<>(orderKeyColumn, SortOrder.ASC_NULLS_FIRST),
-                    new SortingProperty<>(columns.get(LineItemColumn.LINE_NUMBER.getColumnName()), SortOrder.ASC_NULLS_FIRST));
+                    new SortingProperty<>(columns.get(columnNaming.getName(LineItemColumn.LINE_NUMBER)), SortOrder.ASC_NULLS_FIRST));
         }
 
         ConnectorTableLayout layout = new ConnectorTableLayout(
@@ -155,7 +161,7 @@ public class TpchMetadata
     @Override
     public ConnectorTableLayout getTableLayout(ConnectorSession session, ConnectorTableLayoutHandle handle)
     {
-        TpchTableLayoutHandle layout = checkType(handle, TpchTableLayoutHandle.class, "layout");
+        TpchTableLayoutHandle layout = (TpchTableLayoutHandle) handle;
 
         // tables in this connector have a single layout
         return getTableLayouts(session, layout.getTable(), Constraint.alwaysTrue(), Optional.empty())
@@ -166,19 +172,19 @@ public class TpchMetadata
     @Override
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        TpchTableHandle tpchTableHandle = checkType(tableHandle, TpchTableHandle.class, "tableHandle");
+        TpchTableHandle tpchTableHandle = (TpchTableHandle) tableHandle;
 
         TpchTable<?> tpchTable = TpchTable.getTable(tpchTableHandle.getTableName());
         String schemaName = scaleFactorSchemaName(tpchTableHandle.getScaleFactor());
 
-        return getTableMetadata(schemaName, tpchTable);
+        return getTableMetadata(schemaName, tpchTable, columnNaming);
     }
 
-    private static ConnectorTableMetadata getTableMetadata(String schemaName, TpchTable<?> tpchTable)
+    private static ConnectorTableMetadata getTableMetadata(String schemaName, TpchTable<?> tpchTable, ColumnNaming columnNaming)
     {
         ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
         for (TpchColumn<? extends TpchEntity> column : tpchTable.getColumns()) {
-            columns.add(new ColumnMetadata(column.getColumnName(), getPrestoType(column.getType())));
+            columns.add(new ColumnMetadata(columnNaming.getName(column), getPrestoType(column.getType())));
         }
         columns.add(new ColumnMetadata(ROW_NUMBER_COLUMN_NAME, BIGINT, null, true));
 
@@ -203,7 +209,7 @@ public class TpchMetadata
         for (String schemaName : getSchemaNames(session, prefix.getSchemaName())) {
             for (TpchTable<?> tpchTable : TpchTable.getTables()) {
                 if (prefix.getTableName() == null || tpchTable.getTableName().equals(prefix.getTableName())) {
-                    ConnectorTableMetadata tableMetadata = getTableMetadata(schemaName, tpchTable);
+                    ConnectorTableMetadata tableMetadata = getTableMetadata(schemaName, tpchTable, columnNaming);
                     tableColumns.put(new SchemaTableName(schemaName, tpchTable.getTableName()), tableMetadata.getColumns());
                 }
             }
@@ -215,7 +221,7 @@ public class TpchMetadata
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         ConnectorTableMetadata tableMetadata = getTableMetadata(session, tableHandle);
-        String columnName = checkType(columnHandle, TpchColumnHandle.class, "columnHandle").getColumnName();
+        String columnName = ((TpchColumnHandle) columnHandle).getColumnName();
 
         for (ColumnMetadata column : tableMetadata.getColumns()) {
             if (column.getName().equals(columnName)) {

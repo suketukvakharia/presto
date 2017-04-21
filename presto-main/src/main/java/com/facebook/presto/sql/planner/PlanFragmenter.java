@@ -37,7 +37,6 @@ import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 
 import java.util.ArrayList;
@@ -52,10 +51,10 @@ import static com.facebook.presto.sql.planner.SystemPartitioningHandle.COORDINAT
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -69,7 +68,7 @@ public class PlanFragmenter
 
     public static SubPlan createSubPlans(Session session, Metadata metadata, Plan plan)
     {
-        Fragmenter fragmenter = new Fragmenter(session, metadata, plan.getSymbolAllocator().getTypes());
+        Fragmenter fragmenter = new Fragmenter(session, metadata, plan.getTypes());
 
         FragmentProperties properties = new FragmentProperties(new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getRoot().getOutputSymbols()))
                 .setSingleNodeDistribution();
@@ -186,24 +185,17 @@ public class PlanFragmenter
 
             PartitioningScheme partitioningScheme = exchange.getPartitioningScheme();
 
-            ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
             if (exchange.getType() == ExchangeNode.Type.GATHER) {
                 context.get().setSingleNodeDistribution();
-
-                for (int i = 0; i < exchange.getSources().size(); i++) {
-                    FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(exchange.getInputs().get(i)));
-                    builder.add(buildSubPlan(exchange.getSources().get(i), childProperties, context));
-                }
             }
             else if (exchange.getType() == ExchangeNode.Type.REPARTITION) {
                 context.get().setDistribution(partitioningScheme.getPartitioning().getHandle());
-
-                FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(Iterables.getOnlyElement(exchange.getInputs())));
-                builder.add(buildSubPlan(Iterables.getOnlyElement(exchange.getSources()), childProperties, context));
             }
-            else if (exchange.getType() == ExchangeNode.Type.REPLICATE) {
-                FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(Iterables.getOnlyElement(exchange.getInputs())));
-                builder.add(buildSubPlan(Iterables.getOnlyElement(exchange.getSources()), childProperties, context));
+
+            ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
+            for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
+                FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(exchange.getInputs().get(sourceIndex)));
+                builder.add(buildSubPlan(exchange.getSources().get(sourceIndex), childProperties, context));
             }
 
             List<SubPlan> children = builder.build();

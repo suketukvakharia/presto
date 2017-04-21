@@ -26,9 +26,6 @@ import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ExecutionError;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.units.Duration;
-import org.apache.hadoop.hive.metastore.api.Database;
-import org.apache.hadoop.hive.metastore.api.PrincipalPrivilegeSet;
-import org.apache.hadoop.hive.metastore.api.PrivilegeGrantInfo;
 import org.weakref.jmx.Managed;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -76,25 +73,28 @@ public class CachingHiveMetastore
     @Inject
     public CachingHiveMetastore(@ForCachingHiveMetastore ExtendedHiveMetastore delegate, @ForCachingHiveMetastore ExecutorService executor, HiveClientConfig hiveClientConfig)
     {
-        this(requireNonNull(delegate, "delegate is null"),
-                requireNonNull(executor, "executor is null"),
-                requireNonNull(hiveClientConfig, "hiveClientConfig is null").getMetastoreCacheTtl(),
+        this(
+                delegate,
+                executor,
+                hiveClientConfig.getMetastoreCacheTtl(),
                 hiveClientConfig.getMetastoreRefreshInterval(),
                 hiveClientConfig.getMetastoreCacheMaximumSize());
     }
 
     public CachingHiveMetastore(ExtendedHiveMetastore delegate, ExecutorService executor, Duration cacheTtl, Duration refreshInterval, long maximumSize)
     {
-        this(requireNonNull(delegate, "delegate is null"),
-                requireNonNull(executor, "executor is null"),
-                OptionalLong.of(requireNonNull(cacheTtl, "cacheTtl is null").toMillis()),
-                OptionalLong.of(requireNonNull(refreshInterval, "refreshInterval is null").toMillis()),
+        this(
+                delegate,
+                executor,
+                OptionalLong.of(cacheTtl.toMillis()),
+                refreshInterval.toMillis() >= cacheTtl.toMillis() ? OptionalLong.empty() : OptionalLong.of(refreshInterval.toMillis()),
                 maximumSize);
     }
 
     public static CachingHiveMetastore memoizeMetastore(ExtendedHiveMetastore delegate, long maximumSize)
     {
-        return new CachingHiveMetastore(requireNonNull(delegate, "delegate is null"),
+        return new CachingHiveMetastore(
+                delegate,
                 newDirectExecutorService(),
                 OptionalLong.empty(),
                 OptionalLong.empty(),
@@ -103,7 +103,8 @@ public class CachingHiveMetastore
 
     private CachingHiveMetastore(ExtendedHiveMetastore delegate, ExecutorService executor, OptionalLong expiresAfterWriteMillis, OptionalLong refreshMills, long maximumSize)
     {
-        this.delegate = delegate;
+        this.delegate = requireNonNull(delegate, "delegate is null");
+        requireNonNull(executor, "executor is null");
 
         databaseNamesCache = newCacheBuilder(expiresAfterWriteMillis, refreshMills, maximumSize)
                 .build(asyncReloading(new CacheLoader<String, List<String>>()
@@ -324,7 +325,7 @@ public class CachingHiveMetastore
             delegate.createDatabase(database);
         }
         finally {
-            invalidateDatabase(database.getName());
+            invalidateDatabase(database.getDatabaseName());
         }
     }
 
@@ -358,10 +359,10 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void createTable(Table table, PrincipalPrivilegeSet principalPrivilegeSet)
+    public void createTable(Table table, PrincipalPrivileges principalPrivileges)
     {
         try {
-            delegate.createTable(table, principalPrivilegeSet);
+            delegate.createTable(table, principalPrivileges);
         }
         finally {
             invalidateTable(table.getDatabaseName(), table.getTableName());
@@ -380,10 +381,10 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivilegeSet principalPrivilegeSet)
+    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges)
     {
         try {
-            delegate.replaceTable(databaseName, tableName, newTable, principalPrivilegeSet);
+            delegate.replaceTable(databaseName, tableName, newTable, principalPrivileges);
         }
         finally {
             invalidateTable(databaseName, tableName);
@@ -430,6 +431,9 @@ public class CachingHiveMetastore
         tableCache.invalidate(new HiveTableName(databaseName, tableName));
         tableNamesCache.invalidate(databaseName);
         viewNamesCache.invalidate(databaseName);
+        userTablePrivileges.asMap().keySet().stream()
+                .filter(userTableKey -> userTableKey.matches(databaseName, tableName))
+                .forEach(userTablePrivileges::invalidate);
         invalidatePartitionCache(databaseName, tableName);
     }
 
@@ -591,10 +595,10 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void grantTablePrivileges(String databaseName, String tableName, String grantee, Set<PrivilegeGrantInfo> privilegeGrantInfoSet)
+    public void grantTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges)
     {
         try {
-            delegate.grantTablePrivileges(databaseName, tableName, grantee, privilegeGrantInfoSet);
+            delegate.grantTablePrivileges(databaseName, tableName, grantee, privileges);
         }
         finally {
             userTablePrivileges.invalidate(new UserTableKey(grantee, tableName, databaseName));
@@ -602,10 +606,10 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void revokeTablePrivileges(String databaseName, String tableName, String grantee, Set<PrivilegeGrantInfo> privilegeGrantInfoSet)
+    public void revokeTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges)
     {
         try {
-            delegate.revokeTablePrivileges(databaseName, tableName, grantee, privilegeGrantInfoSet);
+            delegate.revokeTablePrivileges(databaseName, tableName, grantee, privileges);
         }
         finally {
             userTablePrivileges.invalidate(new UserTableKey(grantee, tableName, databaseName));
@@ -618,7 +622,7 @@ public class CachingHiveMetastore
         if (expiresAfterWriteMillis.isPresent()) {
             cacheBuilder = cacheBuilder.expireAfterWrite(expiresAfterWriteMillis.getAsLong(), MILLISECONDS);
         }
-        if (refreshMillis.isPresent()) {
+        if (refreshMillis.isPresent() && (!expiresAfterWriteMillis.isPresent() || expiresAfterWriteMillis.getAsLong() > refreshMillis.getAsLong())) {
             cacheBuilder = cacheBuilder.refreshAfterWrite(refreshMillis.getAsLong(), MILLISECONDS);
         }
         cacheBuilder = cacheBuilder.maximumSize(maximumSize);
@@ -840,6 +844,11 @@ public class CachingHiveMetastore
         public String getTable()
         {
             return table;
+        }
+
+        public boolean matches(String databaseName, String tableName)
+        {
+            return this.database.equals(databaseName) && this.table.equals(tableName);
         }
 
         @Override

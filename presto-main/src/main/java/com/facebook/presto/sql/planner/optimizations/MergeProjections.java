@@ -20,14 +20,14 @@ import com.facebook.presto.sql.planner.ExpressionSymbolInliner;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
 import com.facebook.presto.sql.tree.TryExpression;
+import com.facebook.presto.sql.util.AstUtils;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 
 import java.util.Map;
 
@@ -37,6 +37,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Merges chains of consecutive projections
  */
+@Deprecated
 public class MergeProjections
         implements PlanOptimizer
 {
@@ -63,10 +64,9 @@ public class MergeProjections
             if (source instanceof ProjectNode) {
                 ProjectNode sourceProject = (ProjectNode) source;
                 if (isDeterministic(sourceProject) && !containsTry(node)) {
-                    ImmutableMap.Builder<Symbol, Expression> projections = ImmutableMap.builder();
+                    Assignments.Builder projections = Assignments.builder();
                     for (Map.Entry<Symbol, Expression> projection : node.getAssignments().entrySet()) {
-                        Expression inlined = ExpressionTreeRewriter.rewriteWith(
-                                new ExpressionSymbolInliner(sourceProject.getAssignments()), projection.getValue());
+                        Expression inlined = new ExpressionSymbolInliner(sourceProject.getAssignments().getMap()).rewrite(projection.getValue());
                         projections.put(projection.getKey(), inlined);
                     }
 
@@ -78,12 +78,15 @@ public class MergeProjections
 
         private static boolean isDeterministic(ProjectNode node)
         {
-            return node.getAssignments().values().stream().allMatch(DeterminismEvaluator::isDeterministic);
+            return node.getAssignments().getExpressions().stream().allMatch(DeterminismEvaluator::isDeterministic);
         }
 
         private static boolean containsTry(ProjectNode node)
         {
-            return node.getAssignments().values().stream().anyMatch(TryExpression.class::isInstance);
+            return node.getAssignments()
+                    .getExpressions().stream()
+                    .flatMap(AstUtils::preOrder)
+                    .anyMatch(TryExpression.class::isInstance);
         }
     }
 }

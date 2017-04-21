@@ -133,7 +133,7 @@ public class ArrayElementBlockWriter
     }
 
     @Override
-    public void reset(BlockBuilderStatus blockBuilderStatus)
+    public BlockBuilder newBlockBuilderLike(BlockBuilderStatus blockBuilderStatus)
     {
         throw new UnsupportedOperationException();
     }

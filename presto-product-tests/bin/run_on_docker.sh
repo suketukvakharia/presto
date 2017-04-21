@@ -80,6 +80,9 @@ function stop_application_runner_containers() {
     docker stop ${CONTAINER_NAME}
     echo "Container stopped: ${CONTAINER_NAME}"
   done
+  echo "Removing dead application-runner containers"
+  docker ps -aq --no-trunc --filter status=dead --filter status=exited --filter name=common_application-runner \
+  | xargs docker rm -v || true
 }
 
 function stop_all_containers() {
@@ -99,7 +102,9 @@ function stop_docker_compose_containers() {
     stop_application_runner_containers ${ENVIRONMENT}
 
     # stop containers started with "up", removing their volumes
-    environment_compose down -v
+    # Some containers (SQL Server) fail to stop on Travis after running the tests. We don't have an easy way to
+    # reproduce this locally. Since all the tests complete successfully, we ignore this failure.
+    environment_compose down -v || true
   fi
 
   echo "Docker compose containers stopped: [$ENVIRONMENT]"
@@ -192,11 +197,25 @@ fi
 trap terminate INT TERM EXIT
 
 # start external services
-EXTERNAL_SERVICES="hadoop-master mysql postgres cassandra"
+# Tempto fails if cassandra is not running. It will
+# be removed from the list of EXTERNAL_SERVICES for
+# singlenode-sqlserver once we resolve
+# https://github.com/prestodb/tempto/issues/190
+if [[ "$ENVIRONMENT" == "singlenode-sqlserver" ]]; then
+  EXTERNAL_SERVICES="hadoop-master cassandra sqlserver"
+else
+  EXTERNAL_SERVICES="hadoop-master mysql postgres cassandra"
+fi
 environment_compose up -d ${EXTERNAL_SERVICES}
 
 # start docker logs for the external services
 environment_compose logs --no-color -f ${EXTERNAL_SERVICES} &
+
+# start ldap container
+if [[ "$ENVIRONMENT" == "singlenode-ldap" ]]; then
+  environment_compose up -d ldapserver
+fi
+
 HADOOP_LOGS_PID=$!
 
 # wait until hadoop processes is started

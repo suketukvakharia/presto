@@ -24,11 +24,11 @@ import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
-import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.collect.ImmutableList;
@@ -43,8 +43,10 @@ import java.util.stream.Collectors;
 
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.PARTIAL;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static java.util.Objects.requireNonNull;
 
@@ -87,6 +89,21 @@ public class PartialAggregationPushDown
                 return context.defaultRewrite(node);
             }
 
+            boolean decomposable = node.isDecomposable(functionRegistry);
+
+            if (node.getStep().equals(SINGLE) &&
+                    node.hasEmptyGroupingSet() &&
+                    node.hasNonEmptyGroupingSet()) {
+                checkState(
+                        decomposable,
+                        "Distributed aggregation with empty grouping set requires partial but functions are not decomposable");
+                return context.rewrite(split(node));
+            }
+
+            if (!decomposable) {
+                return context.defaultRewrite(node);
+            }
+
             // partial aggregation can only be pushed through exchange that doesn't change
             // the cardinality of the stream (i.e., gather or repartition)
             ExchangeNode exchange = (ExchangeNode) child;
@@ -116,14 +133,6 @@ public class PartialAggregationPushDown
                 return context.defaultRewrite(node);
             }
 
-            boolean decomposable = node.getFunctions().values().stream()
-                    .map(functionRegistry::getAggregateFunctionImplementation)
-                    .allMatch(InternalAggregationFunction::isDecomposable);
-
-            if (!decomposable) {
-                return context.defaultRewrite(node);
-            }
-
             switch (node.getStep()) {
                 case SINGLE:
                     // Split it into a FINAL on top of a PARTIAL and
@@ -146,31 +155,25 @@ public class PartialAggregationPushDown
             for (int i = 0; i < exchange.getSources().size(); i++) {
                 PlanNode source = exchange.getSources().get(i);
 
-                if (!exchange.getOutputSymbols().equals(exchange.getInputs().get(i))) {
-                    // Add an identity projection to preserve the inputs to the aggregation, if necessary.
-                    // This allows us to avoid having to rewrite the symbols in the aggregation node below.
-                    ImmutableMap.Builder<Symbol, Expression> assignments = ImmutableMap.builder();
-                    for (int outputIndex = 0; outputIndex < exchange.getOutputSymbols().size(); outputIndex++) {
-                        Symbol output = exchange.getOutputSymbols().get(outputIndex);
-                        Symbol input = exchange.getInputs().get(i).get(outputIndex);
-                        assignments.put(output, input.toSymbolReference());
+                SymbolMapper.Builder mappingsBuilder = SymbolMapper.builder();
+                for (int outputIndex = 0; outputIndex < exchange.getOutputSymbols().size(); outputIndex++) {
+                    Symbol output = exchange.getOutputSymbols().get(outputIndex);
+                    Symbol input = exchange.getInputs().get(i).get(outputIndex);
+                    if (!output.equals(input)) {
+                        mappingsBuilder.put(output, input);
                     }
-
-                    source = new ProjectNode(idAllocator.getNextId(), source, assignments.build());
                 }
 
-                // Since this exchange source is now guaranteed to have the same symbols as the inputs to the the partial
-                // aggregation, we can build a new AggregationNode without any further symbol rewrites
-                partials.add(new AggregationNode(
-                        idAllocator.getNextId(),
-                        source,
-                        partial.getAggregations(),
-                        partial.getFunctions(),
-                        partial.getMasks(),
-                        partial.getGroupingSets(),
-                        partial.getStep(),
-                        partial.getHashSymbol(),
-                        partial.getGroupIdSymbol()));
+                SymbolMapper symbolMapper = mappingsBuilder.build();
+                AggregationNode mappedPartial = symbolMapper.map(partial, source, idAllocator);
+
+                Assignments.Builder assignments = Assignments.builder();
+
+                for (Symbol output : partial.getOutputSymbols()) {
+                    Symbol input = symbolMapper.map(output);
+                    assignments.put(output, input.toSymbolReference());
+                }
+                partials.add(new ProjectNode(idAllocator.getNextId(), mappedPartial, assignments.build()));
             }
 
             for (PlanNode node : partials) {
