@@ -4879,7 +4879,7 @@ public abstract class AbstractTestQueries
     {
         MaterializedResult result = computeActual("SHOW FUNCTIONS");
         ImmutableMultimap<String, MaterializedRow> functions = Multimaps.index(result.getMaterializedRows(), input -> {
-            assertEquals(input.getFieldCount(), 6);
+            assertEquals(input.getFieldCount(), 9);
             return (String) input.getField(0);
         });
 
@@ -4907,18 +4907,39 @@ public abstract class AbstractTestQueries
         assertTrue(functions.containsKey("abs"), "Expected function names " + functions + " to contain 'abs'");
         assertEquals(functions.get("abs").asList().get(0).getField(3), "scalar");
         assertEquals(functions.get("abs").asList().get(0).getField(4), true);
+        assertEquals(functions.get("abs").asList().get(0).getField(6), false);
+        assertEquals(functions.get("abs").asList().get(0).getField(7), true);
+        assertEquals(functions.get("abs").asList().get(0).getField(8), "");
 
         assertTrue(functions.containsKey("rand"), "Expected function names " + functions + " to contain 'rand'");
         assertEquals(functions.get("rand").asList().get(0).getField(3), "scalar");
         assertEquals(functions.get("rand").asList().get(0).getField(4), false);
+        assertEquals(functions.get("rand").asList().get(0).getField(6), false);
+        assertEquals(functions.get("rand").asList().get(0).getField(7), true);
+        assertEquals(functions.get("rand").asList().get(0).getField(8), "");
 
         assertTrue(functions.containsKey("rank"), "Expected function names " + functions + " to contain 'rank'");
         assertEquals(functions.get("rank").asList().get(0).getField(3), "window");
+        assertEquals(functions.get("rank").asList().get(0).getField(4), true);
+        assertEquals(functions.get("rank").asList().get(0).getField(6), false);
+        assertEquals(functions.get("rank").asList().get(0).getField(7), true);
+        assertEquals(functions.get("rank").asList().get(0).getField(8), "");
 
-        assertTrue(functions.containsKey("rank"), "Expected function names " + functions + " to contain 'split_part'");
+        assertTrue(functions.containsKey("greatest"), "Expected function names " + functions + " to contain 'greatest'");
+        assertEquals(functions.get("greatest").asList().get(0).getField(3), "scalar");
+        assertEquals(functions.get("greatest").asList().get(0).getField(4), true);
+        assertEquals(functions.get("greatest").asList().get(0).getField(6), true);
+        assertEquals(functions.get("greatest").asList().get(0).getField(7), true);
+        assertEquals(functions.get("greatest").asList().get(0).getField(8), "");
+
+        assertTrue(functions.containsKey("split_part"), "Expected function names " + functions + " to contain 'split_part'");
         assertEquals(functions.get("split_part").asList().get(0).getField(1), "varchar(x)");
         assertEquals(functions.get("split_part").asList().get(0).getField(2), "varchar(x), varchar(y), bigint");
         assertEquals(functions.get("split_part").asList().get(0).getField(3), "scalar");
+        assertEquals(functions.get("split_part").asList().get(0).getField(4), true);
+        assertEquals(functions.get("split_part").asList().get(0).getField(6), false);
+        assertEquals(functions.get("split_part").asList().get(0).getField(7), true);
+        assertEquals(functions.get("split_part").asList().get(0).getField(8), "");
 
         assertFalse(functions.containsKey("like"), "Expected function names " + functions + " not to contain 'like'");
     }
@@ -8249,6 +8270,31 @@ public abstract class AbstractTestQueries
         assertQuery(
                 noJoinReordering(),
                 "WITH small_part AS (SELECT * FROM part WHERE name = 'a') SELECT lineitem.orderkey FROM small_part RIGHT JOIN lineitem ON  small_part.partkey = lineitem.partkey");
+    }
+
+    @Test
+    public void testLastValueIgnoreNulls()
+    {
+        assertQuery(
+                "WITH T AS (" +
+                        "    SELECT" +
+                        "        p," +
+                        "        v" +
+                        "    FROM (" +
+                        "        VALUES" +
+                        "            (2, 2)," +
+                        "            (1, 1)," +
+                        "            (3, NULL)" +
+                        "    ) T(p, v)" +
+                        ")" +
+                        "SELECT" +
+                        "    LAST_VALUE(v) IGNORE NULLS OVER (" +
+                        "        PARTITION BY 1" +
+                        "        ORDER BY" +
+                        "            p ASC" +
+                        "    )" +
+                        "FROM T",
+                "Values 1, 2, 2");
     }
 
     protected Session noJoinReordering()

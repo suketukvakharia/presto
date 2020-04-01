@@ -17,6 +17,7 @@ import com.facebook.presto.execution.QueryManagerConfig;
 import com.facebook.presto.execution.QueryManagerConfig.ExchangeMaterializationStrategy;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.memory.MemoryManagerConfig;
+import com.facebook.presto.memory.NodeMemoryConfig;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
@@ -65,18 +66,22 @@ public final class SystemSessionProperties
     public static final String HASH_PARTITION_COUNT = "hash_partition_count";
     public static final String PARTITIONING_PROVIDER_CATALOG = "partitioning_provider_catalog";
     public static final String EXCHANGE_MATERIALIZATION_STRATEGY = "exchange_materialization_strategy";
+    public static final String USE_STREAMING_EXCHANGE_FOR_MARK_DISTINCT = "use_stream_exchange_for_mark_distinct";
     public static final String GROUPED_EXECUTION_FOR_AGGREGATION = "grouped_execution_for_aggregation";
     public static final String GROUPED_EXECUTION_FOR_ELIGIBLE_TABLE_SCANS = "grouped_execution_for_eligible_table_scans";
     public static final String DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION = "dynamic_schedule_for_grouped_execution";
     public static final String RECOVERABLE_GROUPED_EXECUTION = "recoverable_grouped_execution";
     public static final String MAX_FAILED_TASK_PERCENTAGE = "max_failed_task_percentage";
+    public static final String MAX_STAGE_RETRIES = "max_stage_retries";
     public static final String PREFER_STREAMING_OPERATORS = "prefer_streaming_operators";
     public static final String TASK_WRITER_COUNT = "task_writer_count";
     public static final String TASK_PARTITIONED_WRITER_COUNT = "task_partitioned_writer_count";
     public static final String TASK_CONCURRENCY = "task_concurrency";
     public static final String TASK_SHARE_INDEX_LOADING = "task_share_index_loading";
     public static final String QUERY_MAX_MEMORY = "query_max_memory";
+    public static final String QUERY_MAX_MEMORY_PER_NODE = "query_max_memory_per_node";
     public static final String QUERY_MAX_TOTAL_MEMORY = "query_max_total_memory";
+    public static final String QUERY_MAX_TOTAL_MEMORY_PER_NODE = "query_max_total_memory_per_node";
     public static final String QUERY_MAX_EXECUTION_TIME = "query_max_execution_time";
     public static final String QUERY_MAX_RUN_TIME = "query_max_run_time";
     public static final String RESOURCE_OVERCOMMIT = "resource_overcommit";
@@ -85,6 +90,7 @@ public final class SystemSessionProperties
     public static final String REDISTRIBUTE_WRITES = "redistribute_writes";
     public static final String SCALE_WRITERS = "scale_writers";
     public static final String WRITER_MIN_SIZE = "writer_min_size";
+    public static final String OPTIMIZED_SCALE_WRITER_PRODUCER_BUFFER = "optimized_scale_writer_producer_buffer";
     public static final String PUSH_TABLE_WRITE_THROUGH_UNION = "push_table_write_through_union";
     public static final String EXECUTION_POLICY = "execution_policy";
     public static final String DICTIONARY_AGGREGATION = "dictionary_aggregation";
@@ -141,12 +147,14 @@ public final class SystemSessionProperties
     public static final String AGGREGATION_PARTITIONING_MERGING_STRATEGY = "aggregation_partitioning_merging_strategy";
     public static final String LIST_BUILT_IN_FUNCTIONS_ONLY = "list_built_in_functions_only";
     public static final String PARTITIONING_PRECISION_STRATEGY = "partitioning_precision_strategy";
+    public static final String EXPERIMENTAL_FUNCTIONS_ENABLED = "experimental_functions_enabled";
+    public static final String USE_LEGACY_SCHEDULER = "use_legacy_scheduler";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
     public SystemSessionProperties()
     {
-        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig());
+        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new NodeMemoryConfig());
     }
 
     @Inject
@@ -154,7 +162,8 @@ public final class SystemSessionProperties
             QueryManagerConfig queryManagerConfig,
             TaskManagerConfig taskManagerConfig,
             MemoryManagerConfig memoryManagerConfig,
-            FeaturesConfig featuresConfig)
+            FeaturesConfig featuresConfig,
+            NodeMemoryConfig nodeMemoryConfig)
     {
         sessionProperties = ImmutableList.of(
                 stringProperty(
@@ -221,6 +230,11 @@ public final class SystemSessionProperties
                         value -> ExchangeMaterializationStrategy.valueOf(((String) value).toUpperCase()),
                         ExchangeMaterializationStrategy::name),
                 booleanProperty(
+                        USE_STREAMING_EXCHANGE_FOR_MARK_DISTINCT,
+                        "Use streaming instead of materialization for mark distinct with materialized exchange enabled",
+                        queryManagerConfig.getUseStreamingExchangeForMarkDistinct(),
+                        false),
+                booleanProperty(
                         GROUPED_EXECUTION_FOR_AGGREGATION,
                         "Use grouped execution for aggregation when possible",
                         featuresConfig.isGroupedExecutionForAggregationEnabled(),
@@ -244,6 +258,11 @@ public final class SystemSessionProperties
                         RECOVERABLE_GROUPED_EXECUTION,
                         "Experimental: Use recoverable grouped execution when possible",
                         featuresConfig.isRecoverableGroupedExecutionEnabled(),
+                        false),
+                integerProperty(
+                        MAX_STAGE_RETRIES,
+                        "Maximum number of times that stages can be retried",
+                        featuresConfig.getMaxStageRetries(),
                         false),
                 booleanProperty(
                         PREFER_STREAMING_OPERATORS,
@@ -287,6 +306,11 @@ public final class SystemSessionProperties
                         false,
                         value -> DataSize.valueOf((String) value),
                         DataSize::toString),
+                booleanProperty(
+                        OPTIMIZED_SCALE_WRITER_PRODUCER_BUFFER,
+                        "Optimize scale writer creation based on producer buffer",
+                        featuresConfig.isOptimizedScaleWriterProducerBuffer(),
+                        true),
                 booleanProperty(
                         PUSH_TABLE_WRITE_THROUGH_UNION,
                         "Parallelize writes when using UNION ALL in queries that write data",
@@ -343,11 +367,29 @@ public final class SystemSessionProperties
                         value -> DataSize.valueOf((String) value),
                         DataSize::toString),
                 new PropertyMetadata<>(
+                        QUERY_MAX_MEMORY_PER_NODE,
+                        "Maximum amount of user task memory a query can use",
+                        VARCHAR,
+                        DataSize.class,
+                        nodeMemoryConfig.getMaxQueryMemoryPerNode(),
+                        true,
+                        value -> DataSize.valueOf((String) value),
+                        DataSize::toString),
+                new PropertyMetadata<>(
                         QUERY_MAX_TOTAL_MEMORY,
                         "Maximum amount of distributed total memory a query can use",
                         VARCHAR,
                         DataSize.class,
                         memoryManagerConfig.getMaxQueryTotalMemory(),
+                        true,
+                        value -> DataSize.valueOf((String) value),
+                        DataSize::toString),
+                new PropertyMetadata<>(
+                        QUERY_MAX_TOTAL_MEMORY_PER_NODE,
+                        "Maximum amount of total (user + system) task memory a query can use",
+                        VARCHAR,
+                        DataSize.class,
+                        nodeMemoryConfig.getMaxQueryTotalMemoryPerNode(),
                         true,
                         value -> DataSize.valueOf((String) value),
                         DataSize::toString),
@@ -704,7 +746,18 @@ public final class SystemSessionProperties
                         featuresConfig.getPartitioningPrecisionStrategy(),
                         false,
                         value -> PartitioningPrecisionStrategy.valueOf(((String) value).toUpperCase()),
-                        PartitioningPrecisionStrategy::name));
+                        PartitioningPrecisionStrategy::name),
+                booleanProperty(
+                        EXPERIMENTAL_FUNCTIONS_ENABLED,
+                        "Enable listing of functions marked as experimental",
+                        featuresConfig.isExperimentalFunctionsEnabled(),
+                        false),
+
+                booleanProperty(
+                        USE_LEGACY_SCHEDULER,
+                        "Use version of scheduler before refactorings for section retries",
+                        featuresConfig.isUseLegacyScheduler(),
+                        false));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -761,6 +814,11 @@ public final class SystemSessionProperties
         return session.getSystemProperty(EXCHANGE_MATERIALIZATION_STRATEGY, ExchangeMaterializationStrategy.class);
     }
 
+    public static boolean isUseStreamingExchangeForMarkDistinctEnabled(Session session)
+    {
+        return session.getSystemProperty(USE_STREAMING_EXCHANGE_FOR_MARK_DISTINCT, Boolean.class);
+    }
+
     public static boolean isGroupedExecutionForAggregationEnabled(Session session)
     {
         return session.getSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, Boolean.class);
@@ -784,6 +842,11 @@ public final class SystemSessionProperties
     public static double getMaxFailedTaskPercentage(Session session)
     {
         return session.getSystemProperty(MAX_FAILED_TASK_PERCENTAGE, Double.class);
+    }
+
+    public static int getMaxStageRetries(Session session)
+    {
+        return session.getSystemProperty(MAX_STAGE_RETRIES, Integer.class);
     }
 
     public static boolean preferStreamingOperators(Session session)
@@ -820,6 +883,11 @@ public final class SystemSessionProperties
         return session.getSystemProperty(WRITER_MIN_SIZE, DataSize.class);
     }
 
+    public static boolean isOptimizedScaleWriterProducerBuffer(Session session)
+    {
+        return session.getSystemProperty(OPTIMIZED_SCALE_WRITER_PRODUCER_BUFFER, Boolean.class);
+    }
+
     public static boolean isPushTableWriteThroughUnion(Session session)
     {
         return session.getSystemProperty(PUSH_TABLE_WRITE_THROUGH_UNION, Boolean.class);
@@ -850,9 +918,19 @@ public final class SystemSessionProperties
         return session.getSystemProperty(QUERY_MAX_MEMORY, DataSize.class);
     }
 
+    public static DataSize getQueryMaxMemoryPerNode(Session session)
+    {
+        return session.getSystemProperty(QUERY_MAX_MEMORY_PER_NODE, DataSize.class);
+    }
+
     public static DataSize getQueryMaxTotalMemory(Session session)
     {
         return session.getSystemProperty(QUERY_MAX_TOTAL_MEMORY, DataSize.class);
+    }
+
+    public static DataSize getQueryMaxTotalMemoryPerNode(Session session)
+    {
+        return session.getSystemProperty(QUERY_MAX_TOTAL_MEMORY_PER_NODE, DataSize.class);
     }
 
     public static Duration getQueryMaxRunTime(Session session)
@@ -1194,5 +1272,15 @@ public final class SystemSessionProperties
     {
         return session.getSystemProperty(PARTITIONING_PRECISION_STRATEGY, PartitioningPrecisionStrategy.class)
                 == PartitioningPrecisionStrategy.PREFER_EXACT_PARTITIONING;
+    }
+
+    public static boolean isExperimentalFunctionsEnabled(Session session)
+    {
+        return session.getSystemProperty(EXPERIMENTAL_FUNCTIONS_ENABLED, Boolean.class);
+    }
+
+    public static boolean isUseLegacyScheduler(Session session)
+    {
+        return session.getSystemProperty(USE_LEGACY_SCHEDULER, Boolean.class);
     }
 }

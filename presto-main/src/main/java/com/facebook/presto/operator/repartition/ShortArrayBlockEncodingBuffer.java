@@ -27,6 +27,7 @@
  */
 package com.facebook.presto.operator.repartition;
 
+import com.facebook.presto.spi.block.ArrayAllocator;
 import com.google.common.annotations.VisibleForTesting;
 import io.airlift.slice.SliceOutput;
 import org.openjdk.jol.info.ClassLayout;
@@ -36,7 +37,6 @@ import static com.facebook.presto.array.Arrays.ExpansionOption.PRESERVE;
 import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.operator.UncheckedByteArrays.setShortUnchecked;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
-import static io.airlift.slice.SizeOf.sizeOf;
 import static sun.misc.Unsafe.ARRAY_SHORT_INDEX_SCALE;
 
 public class ShortArrayBlockEncodingBuffer
@@ -50,6 +50,11 @@ public class ShortArrayBlockEncodingBuffer
 
     private byte[] valuesBuffer;
     private int valuesBufferIndex;
+
+    public ShortArrayBlockEncodingBuffer(ArrayAllocator bufferAllocator, boolean isNested)
+    {
+        super(bufferAllocator, isNested);
+    }
 
     @Override
     public void accumulateSerializedRowSizes(int[] serializedRowSizes)
@@ -66,6 +71,7 @@ public class ShortArrayBlockEncodingBuffer
 
         appendValuesToBuffer();
         appendNulls();
+
         bufferedPositionCount += batchSize;
     }
 
@@ -88,16 +94,25 @@ public class ShortArrayBlockEncodingBuffer
     {
         bufferedPositionCount = 0;
         valuesBufferIndex = 0;
+        flushed = true;
         resetNullsBuffer();
+    }
+
+    @Override
+    public void noMoreBatches()
+    {
+        super.noMoreBatches();
+
+        if (flushed && valuesBuffer != null) {
+            bufferAllocator.returnArray(valuesBuffer);
+            valuesBuffer = null;
+        }
     }
 
     @Override
     public long getRetainedSizeInBytes()
     {
-        return INSTANCE_SIZE +
-                getPositionsRetainedSizeInBytes() +
-                sizeOf(valuesBuffer) +
-                getNullsBufferRetainedSizeInBytes();
+        return INSTANCE_SIZE;
     }
 
     @Override
@@ -110,6 +125,15 @@ public class ShortArrayBlockEncodingBuffer
     }
 
     @Override
+    public String toString()
+    {
+        StringBuilder sb = new StringBuilder(getClass().getSimpleName()).append("{");
+        sb.append("valuesBufferCapacity=").append(valuesBuffer == null ? 0 : valuesBuffer.length).append(",");
+        sb.append("valuesBufferIndex=").append(valuesBufferIndex).append("}");
+        return sb.toString();
+    }
+
+    @Override
     protected void accumulateSerializedRowSizes(int[] positionOffsets, int positionCount, int[] serializedRowSizes)
     {
         for (int i = 0; i < positionCount; i++) {
@@ -119,7 +143,7 @@ public class ShortArrayBlockEncodingBuffer
 
     private void appendValuesToBuffer()
     {
-        valuesBuffer = ensureCapacity(valuesBuffer, valuesBufferIndex + batchSize * ARRAY_SHORT_INDEX_SCALE, LARGE, PRESERVE);
+        valuesBuffer = ensureCapacity(valuesBuffer, valuesBufferIndex + batchSize * ARRAY_SHORT_INDEX_SCALE, LARGE, PRESERVE, bufferAllocator);
 
         int[] positions = getPositions();
         if (decodedBlock.mayHaveNull()) {

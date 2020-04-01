@@ -85,6 +85,7 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.node;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.output;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictTableScan;
+import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE_STREAMING;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.GATHER;
@@ -181,6 +182,26 @@ public class TestHiveLogicalPlanner
                 output(exchange(project(
                         filter("mod(orderkey, 2) = 1",
                                 strictTableScan("lineitem", identityMap("linenumber", "orderkey")))))));
+        // Remaining predicate is NULL
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE cardinality(NULL) > 0",
+                output(values("linenumber")));
+
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE orderkey > 10 AND cardinality(NULL) > 0",
+                output(values("linenumber")));
+
+        // Remaining predicate is always FALSE
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE cardinality(ARRAY[1]) > 1",
+                output(values("linenumber")));
+
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE orderkey > 10 AND cardinality(ARRAY[1]) > 1",
+                output(values("linenumber")));
+
+        // TupleDomain predicate is always FALSE
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE orderkey = 1 AND orderkey = 2",
+                output(values("linenumber")));
+
+        assertPlan(pushdownFilterEnabled, "SELECT linenumber FROM lineitem WHERE orderkey = 1 AND orderkey = 2 AND linenumber % 2 = 1",
+                output(values("linenumber")));
 
         FunctionManager functionManager = getQueryRunner().getMetadata().getFunctionManager();
         FunctionResolution functionResolution = new FunctionResolution(functionManager);
@@ -333,6 +354,10 @@ public class TestHiveLogicalPlanner
         assertPushdownFilterOnSubfields("SELECT * FROM test_pushdown_filter_on_subfields WHERE c.a IS NOT NULL AND c.c IS NOT NULL",
                 ImmutableMap.of(new Subfield("c.a"), notNull(BIGINT), new Subfield("c.c"), notNull(new ArrayType(BIGINT))));
 
+        // TupleDomain predicate is always FALSE
+        assertPlan(pushdownFilterEnabled(), "SELECT id FROM test_pushdown_filter_on_subfields WHERE c.a = 1 AND c.a = 2",
+                output(values("id")));
+
         assertUpdate("DROP TABLE test_pushdown_filter_on_subfields");
     }
 
@@ -401,6 +426,9 @@ public class TestHiveLogicalPlanner
         // Map with varchar keys
         assertPushdownSubfields("SELECT c['cat'] FROM test_pushdown_map_subscripts", "test_pushdown_map_subscripts",
                 ImmutableMap.of("c", toSubfields("c[\"cat\"]")));
+
+        assertPushdownSubfields("SELECT c[JSON_EXTRACT_SCALAR(JSON_PARSE('{}'),'$.a')] FROM test_pushdown_map_subscripts", "test_pushdown_map_subscripts",
+                ImmutableMap.of());
 
         assertPushdownSubfields("SELECT mod(c['cat'], 2) FROM test_pushdown_map_subscripts WHERE c['dog'] > 10", "test_pushdown_map_subscripts",
                 ImmutableMap.of("c", toSubfields("c[\"cat\"]", "c[\"dog\"]")));

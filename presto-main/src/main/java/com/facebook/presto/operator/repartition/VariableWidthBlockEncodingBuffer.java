@@ -28,6 +28,7 @@
 package com.facebook.presto.operator.repartition;
 
 import com.facebook.presto.spi.block.AbstractVariableWidthBlock;
+import com.facebook.presto.spi.block.ArrayAllocator;
 import com.google.common.annotations.VisibleForTesting;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
@@ -39,7 +40,6 @@ import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.operator.MoreByteArrays.setBytes;
 import static com.facebook.presto.operator.UncheckedByteArrays.setIntUnchecked;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
-import static io.airlift.slice.SizeOf.sizeOf;
 import static sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET;
 import static sun.misc.Unsafe.ARRAY_INT_INDEX_SCALE;
 
@@ -67,6 +67,11 @@ public class VariableWidthBlockEncodingBuffer
     // The last offset in the offsets buffer
     private int lastOffset;
 
+    public VariableWidthBlockEncodingBuffer(ArrayAllocator bufferAllocator, boolean isNested)
+    {
+        super(bufferAllocator, isNested);
+    }
+
     @Override
     public void accumulateSerializedRowSizes(int[] serializedRowSizes)
     {
@@ -85,6 +90,7 @@ public class VariableWidthBlockEncodingBuffer
 
         appendOffsetsAndSlices();
         appendNulls();
+
         bufferedPositionCount += batchSize;
     }
 
@@ -118,17 +124,32 @@ public class VariableWidthBlockEncodingBuffer
         sliceBufferIndex = 0;
         offsetsBufferIndex = 0;
         lastOffset = 0;
+        flushed = true;
         resetNullsBuffer();
+    }
+
+    @Override
+    public void noMoreBatches()
+    {
+        super.noMoreBatches();
+
+        if (flushed) {
+            if (sliceBuffer != null) {
+                bufferAllocator.returnArray(sliceBuffer);
+                sliceBuffer = null;
+            }
+
+            if (offsetsBuffer != null) {
+                bufferAllocator.returnArray(offsetsBuffer);
+                offsetsBuffer = null;
+            }
+        }
     }
 
     @Override
     public long getRetainedSizeInBytes()
     {
-        return INSTANCE_SIZE +
-                getPositionsRetainedSizeInBytes() +
-                sizeOf(offsetsBuffer) +
-                getNullsBufferRetainedSizeInBytes() +
-                sizeOf(sliceBuffer);
+        return INSTANCE_SIZE;
     }
 
     @Override
@@ -140,6 +161,17 @@ public class VariableWidthBlockEncodingBuffer
                 SIZE_OF_INT +                   // sliceBuffer size.
                 sliceBufferIndex +               // sliceBuffer
                 getNullsBufferSerializedSizeInBytes();  // nulls
+    }
+
+    @Override
+    public String toString()
+    {
+        StringBuilder sb = new StringBuilder(getClass().getSimpleName()).append("{");
+        sb.append("sliceBufferCapacity=").append(sliceBuffer == null ? 0 : sliceBuffer.length).append(",");
+        sb.append("sliceBufferIndex=").append(sliceBufferIndex).append(",");
+        sb.append("offsetsBufferCapacity=").append(offsetsBuffer == null ? 0 : offsetsBuffer.length).append(",");
+        sb.append("offsetsBufferIndex=").append(offsetsBufferIndex).append("}");
+        return sb.toString();
     }
 
     @Override
@@ -162,7 +194,7 @@ public class VariableWidthBlockEncodingBuffer
     // This implementation uses variableWidthBlock.getRawSlice() and variableWidthBlock.getPositionOffset() to achieve high performance
     private void appendOffsetsAndSlices()
     {
-        offsetsBuffer = ensureCapacity(offsetsBuffer, offsetsBufferIndex + batchSize * ARRAY_INT_INDEX_SCALE, LARGE, PRESERVE);
+        offsetsBuffer = ensureCapacity(offsetsBuffer, offsetsBufferIndex + batchSize * ARRAY_INT_INDEX_SCALE, LARGE, PRESERVE, bufferAllocator);
 
         AbstractVariableWidthBlock variableWidthBlock = (AbstractVariableWidthBlock) decodedBlock;
         int[] positions = getPositions();
@@ -187,7 +219,7 @@ public class VariableWidthBlockEncodingBuffer
             offsetsBufferIndex = setIntUnchecked(offsetsBuffer, offsetsBufferIndex, lastOffset);
 
             if (length > 0) {
-                sliceBuffer = ensureCapacity(sliceBuffer, sliceBufferIndex + length, LARGE, PRESERVE);
+                sliceBuffer = ensureCapacity(sliceBuffer, sliceBufferIndex + length, LARGE, PRESERVE, bufferAllocator);
 
                 // The slice address may be greater than 0. Since we are reading from the raw slice, we need to read from beginOffset + sliceAddress.
                 sliceBufferIndex = setBytes(sliceBuffer, sliceBufferIndex, sliceBase, beginOffset + sliceAddress, length);

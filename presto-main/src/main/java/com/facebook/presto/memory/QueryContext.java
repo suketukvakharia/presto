@@ -260,6 +260,8 @@ public class QueryContext
             Session session,
             boolean perOperatorCpuTimerEnabled,
             boolean cpuTimerEnabled,
+            boolean perOperatorAllocationTrackingEnabled,
+            boolean allocationTrackingEnabled,
             boolean legacyLifespanCompletionCondition)
     {
         TaskContext taskContext = TaskContext.createTaskContext(
@@ -272,6 +274,8 @@ public class QueryContext
                 queryMemoryContext.newMemoryTrackingContext(),
                 perOperatorCpuTimerEnabled,
                 cpuTimerEnabled,
+                perOperatorAllocationTrackingEnabled,
+                allocationTrackingEnabled,
                 legacyLifespanCompletionCondition);
         taskContexts.put(taskStateMachine.getTaskId(), taskContext);
         return taskContext;
@@ -300,6 +304,13 @@ public class QueryContext
     public QueryId getQueryId()
     {
         return queryId;
+    }
+
+    public synchronized void setMemoryLimits(DataSize queryMaxTaskMemory, DataSize queryMaxTotalTaskMemory)
+    {
+        // Don't allow session properties to increase memory beyond configured limits
+        maxUserMemory = Math.min(maxUserMemory, queryMaxTaskMemory.toBytes());
+        maxTotalMemory = Math.min(maxTotalMemory, queryMaxTotalTaskMemory.toBytes());
     }
 
     private static class QueryMemoryReservationHandler

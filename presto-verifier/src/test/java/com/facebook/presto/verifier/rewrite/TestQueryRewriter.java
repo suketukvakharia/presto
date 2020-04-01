@@ -13,12 +13,15 @@
  */
 package com.facebook.presto.verifier.rewrite;
 
+import com.facebook.presto.sql.parser.ParsingOptions;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.tree.CreateTableAsSelect;
 import com.facebook.presto.sql.tree.Identifier;
 import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.sql.tree.QualifiedName;
+import com.facebook.presto.sql.tree.Query;
 import com.facebook.presto.sql.tree.Statement;
 import com.facebook.presto.tests.StandaloneQueryRunner;
 import com.facebook.presto.verifier.framework.ClusterType;
@@ -39,14 +42,16 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.sql.SqlFormatter.formatSql;
 import static com.facebook.presto.sql.parser.IdentifierSymbol.AT_SIGN;
 import static com.facebook.presto.sql.parser.IdentifierSymbol.COLON;
+import static com.facebook.presto.sql.parser.ParsingOptions.DecimalLiteralTreatment.AS_DOUBLE;
 import static com.facebook.presto.verifier.VerifierTestUtil.CATALOG;
 import static com.facebook.presto.verifier.VerifierTestUtil.SCHEMA;
+import static com.facebook.presto.verifier.VerifierTestUtil.createTypeManager;
 import static com.facebook.presto.verifier.VerifierTestUtil.setupPresto;
 import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
 import static com.facebook.presto.verifier.framework.ClusterType.TEST;
-import static com.facebook.presto.verifier.framework.VerifierUtil.PARSING_OPTIONS;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
@@ -58,6 +63,7 @@ public class TestQueryRewriter
     private static final QualifiedName DEFAULT_PREFIX = QualifiedName.of("local", "tmp");
     private static final QueryConfiguration CONFIGURATION = new QueryConfiguration(CATALOG, SCHEMA, Optional.of("user"), Optional.empty(), Optional.empty());
     private static final List<Property> TABLE_PROPERTIES_OVERRIDE = ImmutableList.of(new Property(new Identifier("test_property"), new LongLiteral("21")));
+    private static final ParsingOptions PARSING_OPTIONS = ParsingOptions.builder().setDecimalLiteralTreatment(AS_DOUBLE).build();
     private static final SqlParser sqlParser = new SqlParser(new SqlParserOptions().allowIdentifierSymbol(COLON, AT_SIGN));
 
     private static StandaloneQueryRunner queryRunner;
@@ -163,6 +169,54 @@ public class TestQueryRewriter
         assertTableName(catalogRewriter, query, "verifier_batch.local.tmp_");
     }
 
+    @Test
+    public void testRewriteDate()
+    {
+        QueryBundle queryBundle = getQueryRewriter(DEFAULT_PREFIX).rewriteQuery("SELECT date '2020-01-01', date(now()) today", CONTROL);
+        assertCreateTableAs(queryBundle.getQuery(), "SELECT\n" +
+                "  CAST(date '2020-01-01' AS timestamp)\n" +
+                ", CAST(date(now()) AS timestamp) today");
+    }
+
+    @Test
+    public void testRewriteUnknown()
+    {
+        QueryBundle queryBundle = getQueryRewriter(DEFAULT_PREFIX).rewriteQuery("SELECT null, null unknown", CONTROL);
+        assertCreateTableAs(queryBundle.getQuery(), "SELECT\n" +
+                "  CAST(null AS bigint)\n" +
+                ", CAST(null AS bigint) unknown");
+    }
+
+    @Test
+    public void testRewriteNonStorableStructuredTypes()
+    {
+        QueryBundle queryBundle = getQueryRewriter(DEFAULT_PREFIX).rewriteQuery(
+                "SELECT\n" +
+                        "    ARRAY[DATE '2020-01-01'],\n" +
+                        "    ARRAY[NULL],\n" +
+                        "    MAP(\n" +
+                        "        ARRAY[DATE '2020-01-01'], ARRAY[\n" +
+                        "            CAST(ROW(1, 'a', DATE '2020-01-01') AS ROW(x int, y VARCHAR, z date))\n" +
+                        "        ]\n" +
+                        "    ),\n" +
+                        "    ROW(NULL)",
+                CONTROL);
+        assertCreateTableAs(
+                queryBundle.getQuery(),
+                "SELECT\n" +
+                        "    CAST(ARRAY[DATE '2020-01-01'] AS ARRAY(timestamp)),\n" +
+                        "    CAST(ARRAY[NULL] AS ARRAY(BIGINT)),\n" +
+                        "    CAST(\n" +
+                        "        \"map\"(\n" +
+                        "            ARRAY[DATE '2020-01-01'],\n" +
+                        "            ARRAY[\n" +
+                        "                CAST(ROW (1, 'a', DATE '2020-01-01') AS ROW(x int, y VARCHAR, z date))\n" +
+                        "            ]\n" +
+                        "        ) AS MAP(timestamp, ROW(x INTEGER, y VARCHAR, z timestamp))\n" +
+                        "    ),\n" +
+                        "    CAST(ROW (NULL) AS ROW(BIGINT))");
+    }
+
     private void assertShadowed(
             QueryRewriter queryRewriter,
             @Language("SQL") String query,
@@ -189,6 +243,13 @@ public class TestQueryRewriter
         assertTrue(bundle.getTableName().toString().startsWith(expectedPrefix));
     }
 
+    private void assertCreateTableAs(Statement statement, String selectQuery)
+    {
+        assertTrue(statement instanceof CreateTableAsSelect);
+        Query query = ((CreateTableAsSelect) statement).getQuery();
+        assertEquals(formatSql(query, Optional.empty()), formatSql(sqlParser.createStatement(selectQuery, PARSING_OPTIONS), Optional.empty()));
+    }
+
     private List<Statement> templateToStatements(List<String> templates, String tableName)
     {
         return templates.stream()
@@ -201,10 +262,11 @@ public class TestQueryRewriter
     {
         return new QueryRewriter(
                 sqlParser,
+                createTypeManager(),
                 new JdbcPrestoAction(
                         PrestoExceptionClassifier.createDefault(),
                         CONFIGURATION,
-                        new VerificationContext(),
+                        VerificationContext.create(),
                         new PrestoClusterConfig()
                                 .setHost(queryRunner.getServer().getAddress().getHost())
                                 .setJdbcPort(queryRunner.getServer().getAddress().getPort()),

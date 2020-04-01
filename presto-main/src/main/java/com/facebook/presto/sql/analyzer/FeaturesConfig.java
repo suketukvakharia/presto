@@ -67,12 +67,13 @@ public class FeaturesConfig
     private boolean distributedIndexJoinsEnabled;
     private JoinDistributionType joinDistributionType = PARTITIONED;
     private DataSize joinMaxBroadcastTableSize;
-    private boolean colocatedJoinsEnabled;
+    private boolean colocatedJoinsEnabled = true;
     private boolean groupedExecutionForAggregationEnabled;
     private boolean groupedExecutionForEligibleTableScansEnabled;
     private boolean dynamicScheduleForGroupedExecution;
     private boolean recoverableGroupedExecutionEnabled;
     private double maxFailedTaskPercentage = 0.3;
+    private int maxStageRetries;
     private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
@@ -82,6 +83,7 @@ public class FeaturesConfig
     private boolean redistributeWrites = true;
     private boolean scaleWriters;
     private DataSize writerMinSize = new DataSize(32, DataSize.Unit.MEGABYTE);
+    private boolean optimizedScaleWriterProducerBuffer;
     private boolean optimizeMetadataQueries;
     private boolean optimizeHashGeneration = true;
     private boolean enableIntermediateAggregations;
@@ -146,6 +148,8 @@ public class FeaturesConfig
     private Duration indexLoaderTimeout = new Duration(20, SECONDS);
 
     private boolean listBuiltInFunctionsOnly = true;
+    private boolean experimentalFunctionsEnabled;
+    private boolean useLegacyScheduler = true;
 
     private PartitioningPrecisionStrategy partitioningPrecisionStrategy = PartitioningPrecisionStrategy.AUTOMATIC;
 
@@ -425,6 +429,19 @@ public class FeaturesConfig
         return this;
     }
 
+    public int getMaxStageRetries()
+    {
+        return maxStageRetries;
+    }
+
+    @Config("max-stage-retries")
+    @ConfigDescription("Maximum number of times that stages can be retried")
+    public FeaturesConfig setMaxStageRetries(int maxStageRetries)
+    {
+        this.maxStageRetries = maxStageRetries;
+        return this;
+    }
+
     public int getConcurrentLifespansPerTask()
     {
         return concurrentLifespansPerTask;
@@ -565,6 +582,18 @@ public class FeaturesConfig
     public FeaturesConfig setWriterMinSize(DataSize writerMinSize)
     {
         this.writerMinSize = writerMinSize;
+        return this;
+    }
+
+    public boolean isOptimizedScaleWriterProducerBuffer()
+    {
+        return optimizedScaleWriterProducerBuffer;
+    }
+
+    @Config("optimized-scale-writer-producer-buffer")
+    public FeaturesConfig setOptimizedScaleWriterProducerBuffer(boolean optimizedScaleWriterProducerBuffer)
+    {
+        this.optimizedScaleWriterProducerBuffer = optimizedScaleWriterProducerBuffer;
         return this;
     }
 
@@ -1167,6 +1196,31 @@ public class FeaturesConfig
     public FeaturesConfig setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy partitioningPrecisionStrategy)
     {
         this.partitioningPrecisionStrategy = partitioningPrecisionStrategy;
+        return this;
+    }
+
+    public boolean isExperimentalFunctionsEnabled()
+    {
+        return experimentalFunctionsEnabled;
+    }
+
+    @Config("experimental-functions-enabled")
+    public FeaturesConfig setExperimentalFunctionsEnabled(boolean experimentalFunctionsEnabled)
+    {
+        this.experimentalFunctionsEnabled = experimentalFunctionsEnabled;
+        return this;
+    }
+
+    public boolean isUseLegacyScheduler()
+    {
+        return useLegacyScheduler;
+    }
+
+    @Config("use-legacy-scheduler")
+    @ConfigDescription("Use the version of the scheduler before refactorings for section retries")
+    public FeaturesConfig setUseLegacyScheduler(boolean useLegacyScheduler)
+    {
+        this.useLegacyScheduler = useLegacyScheduler;
         return this;
     }
 }

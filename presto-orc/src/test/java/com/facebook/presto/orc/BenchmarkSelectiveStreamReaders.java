@@ -65,6 +65,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
+import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
 import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
@@ -100,8 +101,8 @@ import static org.joda.time.DateTimeZone.UTC;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkSelectiveStreamReaders
 {
-    public static final int ROWS = 10_000_000;
-    public static final List<?> NULL_VALUES = Collections.nCopies(ROWS, null);
+    private static final int ROWS = 10_000_000;
+    private static final List<?> NULL_VALUES = Collections.nCopies(ROWS, null);
     private static final DecimalType SHORT_DECIMAL_TYPE = DecimalType.createDecimalType(10, 5);
     private static final DecimalType LONG_DECIMAL_TYPE = DecimalType.createDecimalType(30, 10);
     private static final int MAX_STRING_LENGTH = 10;
@@ -195,7 +196,8 @@ public class BenchmarkSelectiveStreamReaders
                     ORC,
                     new StorageOrcFileTailSource(),
                     new StorageStripeMetadataSource(),
-                    OrcReaderTestingUtils.createDefaultTestConfig());
+                    OrcReaderTestingUtils.createDefaultTestConfig(),
+                    DEFAULT_HIVE_FILE_CONTEXT);
 
             return orcReader.createSelectiveRecordReader(
                     ImmutableMap.of(0, type),

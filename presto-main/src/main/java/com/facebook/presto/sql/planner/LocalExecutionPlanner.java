@@ -141,6 +141,7 @@ import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.spiller.PartitioningSpillerFactory;
 import com.facebook.presto.spiller.SingleStreamSpillerFactory;
 import com.facebook.presto.spiller.SpillerFactory;
@@ -216,6 +217,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -232,6 +234,7 @@ import static com.facebook.presto.SystemSessionProperties.isOptimizedRepartition
 import static com.facebook.presto.SystemSessionProperties.isSpillEnabled;
 import static com.facebook.presto.expressions.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.expressions.RowExpressionNodeInliner.replaceExpression;
+import static com.facebook.presto.geospatial.SphericalGeographyUtils.sphericalDistance;
 import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
 import static com.facebook.presto.operator.NestedLoopBuildOperator.NestedLoopBuildOperatorFactory;
 import static com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopJoinOperatorFactory;
@@ -247,11 +250,13 @@ import static com.facebook.presto.operator.TableWriterUtils.STATS_START_CHANNEL;
 import static com.facebook.presto.operator.WindowFunctionDefinition.window;
 import static com.facebook.presto.operator.unnest.UnnestOperator.UnnestOperatorFactory;
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
+import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.INTERMEDIATE;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.spi.relation.ExpressionOptimizer.Level.OPTIMIZED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.gen.LambdaBytecodeGenerator.compileLambdaProvider;
 import static com.facebook.presto.sql.planner.RowExpressionInterpreter.rowExpressionInterpreter;
@@ -316,6 +321,8 @@ public class LocalExecutionPlanner
     private final OrderingCompiler orderingCompiler;
     private final JsonCodec<TableCommitContext> tableCommitContextCodec;
 
+    private static final TypeSignature SPHERICAL_GEOGRAPHY_TYPE_SIGNATURE = parseTypeSignature("SphericalGeography");
+
     @Inject
     public LocalExecutionPlanner(
             Metadata metadata,
@@ -376,23 +383,68 @@ public class LocalExecutionPlanner
             RemoteSourceFactory remoteSourceFactory,
             TableWriteInfo tableWriteInfo)
     {
-        List<VariableReferenceExpression> outputLayout = partitioningScheme.getOutputLayout();
+        return plan(
+                taskContext,
+                plan,
+                partitioningScheme,
+                stageExecutionDescriptor,
+                partitionedSourceOrder,
+                createOutputFactory(taskContext, partitioningScheme, outputBuffer),
+                remoteSourceFactory,
+                tableWriteInfo);
+    }
 
+    public LocalExecutionPlan plan(
+            TaskContext taskContext,
+            PlanNode plan,
+            PartitioningScheme partitioningScheme,
+            StageExecutionDescriptor stageExecutionDescriptor,
+            List<PlanNodeId> partitionedSourceOrder,
+            OutputFactory outputFactory,
+            RemoteSourceFactory remoteSourceFactory,
+            TableWriteInfo tableWriteInfo)
+    {
+        return plan(
+                taskContext,
+                stageExecutionDescriptor,
+                plan,
+                partitioningScheme.getOutputLayout(),
+                partitionedSourceOrder,
+                outputFactory,
+                createOutputPartitioning(taskContext, partitioningScheme),
+                remoteSourceFactory,
+                tableWriteInfo);
+    }
+
+    private OutputFactory createOutputFactory(TaskContext taskContext, PartitioningScheme partitioningScheme, OutputBuffer outputBuffer)
+    {
         if (partitioningScheme.getPartitioning().getHandle().equals(FIXED_BROADCAST_DISTRIBUTION) ||
                 partitioningScheme.getPartitioning().getHandle().equals(FIXED_ARBITRARY_DISTRIBUTION) ||
                 partitioningScheme.getPartitioning().getHandle().equals(SCALED_WRITER_DISTRIBUTION) ||
                 partitioningScheme.getPartitioning().getHandle().equals(SINGLE_DISTRIBUTION) ||
                 partitioningScheme.getPartitioning().getHandle().equals(COORDINATOR_DISTRIBUTION)) {
-            return plan(
-                    taskContext,
-                    stageExecutionDescriptor,
-                    plan,
-                    outputLayout,
-                    partitionedSourceOrder,
-                    new TaskOutputFactory(outputBuffer),
-                    remoteSourceFactory,
-                    tableWriteInfo);
+            return new TaskOutputFactory(outputBuffer);
         }
+
+        if (isOptimizedRepartitioningEnabled(taskContext.getSession())) {
+            return new OptimizedPartitionedOutputFactory(outputBuffer, maxPagePartitioningBufferSize);
+        }
+        else {
+            return new PartitionedOutputFactory(outputBuffer, maxPagePartitioningBufferSize);
+        }
+    }
+
+    private Optional<OutputPartitioning> createOutputPartitioning(TaskContext taskContext, PartitioningScheme partitioningScheme)
+    {
+        if (partitioningScheme.getPartitioning().getHandle().equals(FIXED_BROADCAST_DISTRIBUTION) ||
+                partitioningScheme.getPartitioning().getHandle().equals(FIXED_ARBITRARY_DISTRIBUTION) ||
+                partitioningScheme.getPartitioning().getHandle().equals(SCALED_WRITER_DISTRIBUTION) ||
+                partitioningScheme.getPartitioning().getHandle().equals(SINGLE_DISTRIBUTION) ||
+                partitioningScheme.getPartitioning().getHandle().equals(COORDINATOR_DISTRIBUTION)) {
+            return Optional.empty();
+        }
+
+        List<VariableReferenceExpression> outputLayout = partitioningScheme.getOutputLayout();
 
         // We can convert the variables directly into channels, because the root must be a sink and therefore the layout is fixed
         List<Integer> partitionChannels;
@@ -412,7 +464,7 @@ public class LocalExecutionPlanner
                         if (argument instanceof ConstantExpression) {
                             return -1;
                         }
-                        return outputLayout.indexOf((VariableReferenceExpression) argument);
+                        return outputLayout.indexOf(argument);
                     })
                     .collect(toImmutableList());
             partitionConstants = partitioningScheme.getPartitioning().getArguments().stream()
@@ -438,37 +490,7 @@ public class LocalExecutionPlanner
             nullChannel = OptionalInt.of(outputLayout.indexOf(getOnlyElement(partitioningColumns)));
         }
 
-        OutputFactory outputFactory;
-        if (isOptimizedRepartitioningEnabled(taskContext.getSession())) {
-            outputFactory = new OptimizedPartitionedOutputFactory(
-                    partitionFunction,
-                    partitionChannels,
-                    partitionConstants,
-                    partitioningScheme.isReplicateNullsAndAny(),
-                    nullChannel,
-                    outputBuffer,
-                    maxPagePartitioningBufferSize);
-        }
-        else {
-            outputFactory = new PartitionedOutputFactory(
-                    partitionFunction,
-                    partitionChannels,
-                    partitionConstants,
-                    partitioningScheme.isReplicateNullsAndAny(),
-                    nullChannel,
-                    outputBuffer,
-                    maxPagePartitioningBufferSize);
-        }
-
-        return plan(
-                taskContext,
-                stageExecutionDescriptor,
-                plan,
-                outputLayout,
-                partitionedSourceOrder,
-                outputFactory,
-                remoteSourceFactory,
-                tableWriteInfo);
+        return Optional.of(new OutputPartitioning(partitionFunction, partitionChannels, partitionConstants, partitioningScheme.isReplicateNullsAndAny(), nullChannel));
     }
 
     @VisibleForTesting
@@ -479,6 +501,7 @@ public class LocalExecutionPlanner
             List<VariableReferenceExpression> outputLayout,
             List<PlanNodeId> partitionedSourceOrder,
             OutputFactory outputOperatorFactory,
+            Optional<OutputPartitioning> outputPartitioning,
             RemoteSourceFactory remoteSourceFactory,
             TableWriteInfo tableWriteInfo)
     {
@@ -502,6 +525,7 @@ public class LocalExecutionPlanner
                                 plan.getId(),
                                 outputTypes,
                                 pagePreprocessor,
+                                outputPartitioning,
                                 new PagesSerdeFactory(blockEncodingSerde, isExchangeCompressionEnabled(session))))
                         .build(),
                 context.getDriverInstanceCount(),
@@ -777,7 +801,8 @@ public class LocalExecutionPlanner
             OperatorFactory operatorFactory = remoteSourceFactory.createRemoteSource(
                     session,
                     context.getNextOperatorId(),
-                    node.getId());
+                    node.getId(),
+                    getSourceOperatorTypes(node));
 
             return new PhysicalOperation(operatorFactory, makeLayout(node), context, UNGROUPED_EXECUTION);
         }
@@ -1726,7 +1751,24 @@ public class LocalExecutionPlanner
 
         private SpatialPredicate spatialTest(CallExpression functionCall, boolean probeFirst, Optional<OperatorType> comparisonOperator)
         {
-            QualifiedFunctionName functionName = metadata.getFunctionManager().getFunctionMetadata(functionCall.getFunctionHandle()).getName();
+            FunctionMetadata functionMetadata = metadata.getFunctionManager().getFunctionMetadata(functionCall.getFunctionHandle());
+            QualifiedFunctionName functionName = functionMetadata.getName();
+            List<TypeSignature> argumentTypes = functionMetadata.getArgumentTypes();
+            Predicate<TypeSignature> isSpherical = (typeSignature)
+                    -> typeSignature.equals(SPHERICAL_GEOGRAPHY_TYPE_SIGNATURE);
+            if (argumentTypes.stream().allMatch(isSpherical)) {
+                return sphericalSpatialTest(functionName, comparisonOperator);
+            }
+            else if (argumentTypes.stream().noneMatch(isSpherical)) {
+                return euclideanSpatialTest(functionName, comparisonOperator, probeFirst);
+            }
+            else {
+                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Mixing spherical and euclidean geometric types");
+            }
+        }
+
+        private SpatialPredicate euclideanSpatialTest(QualifiedFunctionName functionName, Optional<OperatorType> comparisonOperator, boolean probeFirst)
+        {
             if (functionName.equals(ST_CONTAINS)) {
                 if (probeFirst) {
                     return (buildGeometry, probeGeometry, radius) -> probeGeometry.contains(buildGeometry);
@@ -1766,10 +1808,26 @@ public class LocalExecutionPlanner
                     return (buildGeometry, probeGeometry, radius) -> buildGeometry.distance(probeGeometry) <= radius.getAsDouble();
                 }
                 else {
-                    throw new UnsupportedOperationException("Unsupported comparison operator: " + comparisonOperator.get());
+                    throw new UnsupportedOperationException("Unsupported comparison operator: " + comparisonOperator);
                 }
             }
             throw new UnsupportedOperationException("Unsupported spatial function: " + functionName);
+        }
+
+        private SpatialPredicate sphericalSpatialTest(QualifiedFunctionName functionName, Optional<OperatorType> comparisonOperator)
+        {
+            if (functionName.equals(ST_DISTANCE)) {
+                if (comparisonOperator.get() == OperatorType.LESS_THAN) {
+                    return (buildGeometry, probeGeometry, radius) -> sphericalDistance(buildGeometry, probeGeometry) < radius.getAsDouble();
+                }
+                else if (comparisonOperator.get() == OperatorType.LESS_THAN_OR_EQUAL) {
+                    return (buildGeometry, probeGeometry, radius) -> sphericalDistance(buildGeometry, probeGeometry) <= radius.getAsDouble();
+                }
+                else {
+                    throw new UnsupportedOperationException("Unsupported spherical comparison operator: " + comparisonOperator);
+                }
+            }
+            throw new UnsupportedOperationException("Unsupported spherical spatial function: " + functionName);
         }
 
         private Set<SymbolReference> getSymbolReferences(Collection<VariableReferenceExpression> variables)
@@ -2195,7 +2253,7 @@ public class LocalExecutionPlanner
         public PhysicalOperation visitTableWriter(TableWriterNode node, LocalExecutionPlanContext context)
         {
             // Set table writer count
-            if (node.getPartitioningScheme().isPresent()) {
+            if (node.getTablePartitioningScheme().isPresent()) {
                 context.setDriverInstanceCount(getTaskPartitionedWriterCount(session));
             }
             else {

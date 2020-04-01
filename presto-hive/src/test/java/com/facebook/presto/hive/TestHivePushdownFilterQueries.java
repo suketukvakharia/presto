@@ -50,6 +50,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.tpch.TpchTable.getTables;
 import static java.lang.String.format;
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.util.stream.Collectors.joining;
 
@@ -103,6 +104,9 @@ public class TestHivePushdownFilterQueries
     {
         DistributedQueryRunner queryRunner = HiveQueryRunner.createQueryRunner(getTables(),
                 ImmutableMap.of("experimental.pushdown-subfields-enabled", "true"),
+                // TODO: enable failure detector.  Currently this test has a ton of major GC activity on travis,
+                //  and the failure detector may make the test run longer
+                ImmutableMap.of("failure-detector.enabled", "false"),
                 "sql-standard",
                 ImmutableMap.of("hive.pushdown-filter-enabled", "true"),
                 Optional.empty());
@@ -173,8 +177,8 @@ public class TestHivePushdownFilterQueries
 
         assertQuery(legacyUnnest, "SELECT orderkey, date.day FROM lineitem_ex CROSS JOIN UNNEST(dates) t(date)",
                 "SELECT orderkey, day(shipdate) FROM lineitem WHERE orderkey % 31 <> 0 UNION ALL " +
-                "SELECT orderkey, day(commitdate) FROM lineitem WHERE orderkey % 31 <> 0 UNION ALL " +
-                "SELECT orderkey, day(receiptdate) FROM lineitem WHERE orderkey % 31 <> 0");
+                        "SELECT orderkey, day(commitdate) FROM lineitem WHERE orderkey % 31 <> 0 UNION ALL " +
+                        "SELECT orderkey, day(receiptdate) FROM lineitem WHERE orderkey % 31 <> 0");
     }
 
     @Test
@@ -644,6 +648,7 @@ public class TestHivePushdownFilterQueries
         // filter-only struct
         assertQueryUsingH2Cte("SELECT orderkey FROM lineitem_ex WHERE info IS NOT NULL");
         assertQueryUsingH2Cte("SELECT orderkey FROM lineitem_ex WHERE info IS NOT NULL AND info.orderkey = 16515", rewriter);
+        assertQueryReturnsEmptyResult("SELECT orderkey FROM lineitem_ex WHERE info IS NOT NULL AND info.orderkey = 16515 and info.orderkey = 16516");
         assertQueryUsingH2Cte("SELECT orderkey FROM lineitem_ex WHERE info IS NOT NULL AND info.orderkey + 1 = 16514", rewriter);
 
         // filters on subfields
@@ -727,6 +732,10 @@ public class TestHivePushdownFilterQueries
 
         // filter function on numeric and boolean columns
         assertFilterProject("if(is_returned, linenumber, orderkey) % 5 = 0", "linenumber");
+
+        // filter functions with join predicate pushdown
+        assertQueryReturnsEmptyResult("SELECT * FROM orders o, lineitem_ex l " +
+                "WHERE o.orderkey <> 100 AND cardinality(l.keys) >= 5 AND l.keys[5] <> 1 AND l.keys[5] = o.orderkey");
 
         // filter functions on array columns
         assertFilterProject("keys[1] % 5 = 0", "orderkey");
@@ -854,6 +863,18 @@ public class TestHivePushdownFilterQueries
         assertQueryUsingH2Cte("SELECT * FROM test_schema_evolution WHERE nation_plus_region + nation_minus_region > 20", cte);
         assertQueryUsingH2Cte("select * from test_schema_evolution where nation_plus_region = regionkey", cte);
         assertUpdate("DROP TABLE test_schema_evolution");
+    }
+
+    @Test
+    public void testStructSchemaEvolution()
+            throws IOException
+    {
+        getQueryRunner().execute("CREATE TABLE test_struct(x) AS SELECT CAST(ROW(1, 2) AS ROW(a int, b int)) AS x");
+        getQueryRunner().execute("CREATE TABLE test_struct_add_column(x) AS SELECT CAST(ROW(1, 2, 3) AS ROW(a int, b int, c int)) AS x");
+        Path oldFilePath = getOnlyPath("test_struct");
+        Path newDirectoryPath = getOnlyPath("test_struct_add_column").getParent();
+        Files.move(oldFilePath, Paths.get(newDirectoryPath.toString(), "old_file"), ATOMIC_MOVE);
+        assertQuery("SELECT * FROM test_struct_add_column", "SELECT (1, 2, 3) UNION ALL SELECT (1, 2, null)");
     }
 
     @Test
@@ -1033,11 +1054,24 @@ public class TestHivePushdownFilterQueries
         }
     }
 
+    @Test
+    public void testFilterFunctionsWithOptimization()
+    {
+        assertQuery("SELECT partkey FROM lineitem WHERE orderkey > 10 OR if(json_extract(json_parse('{}'), '$.a') IS NOT NULL, quantity * discount) > 0",
+                "SELECT partkey FROM lineitem WHERE orderkey > 10");
+    }
+
     private Path getPartitionDirectory(String tableName, String partitionClause)
     {
         String filePath = ((String) computeActual(noPushdownFilter(getSession()), format("SELECT \"$path\" FROM %s WHERE %s LIMIT 1", tableName, partitionClause)).getOnlyValue())
                 .replace("file:", "");
         return Paths.get(filePath).getParent();
+    }
+
+    private Path getOnlyPath(String tableName)
+    {
+        return Paths.get(((String) computeActual(noPushdownFilter(getSession()), format("SELECT \"$path\" FROM %s LIMIT 1", tableName)).getOnlyValue())
+                .replace("file:", ""));
     }
 
     private void assertQueryUsingH2Cte(String query, String cte)
