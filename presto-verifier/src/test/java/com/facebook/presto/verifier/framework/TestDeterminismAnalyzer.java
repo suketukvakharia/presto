@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.sql.parser.ParsingOptions;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
@@ -25,7 +25,6 @@ import com.facebook.presto.verifier.prestoaction.PrestoClusterConfig;
 import com.facebook.presto.verifier.prestoaction.PrestoExceptionClassifier;
 import com.facebook.presto.verifier.retry.RetryConfig;
 import com.facebook.presto.verifier.rewrite.QueryRewriter;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
@@ -67,7 +66,7 @@ public class TestDeterminismAnalyzer
         RetryConfig retryConfig = new RetryConfig();
         TypeManager typeManager = createTypeManager();
         PrestoAction prestoAction = new JdbcPrestoAction(
-                PrestoExceptionClassifier.createDefault(),
+                PrestoExceptionClassifier.defaultBuilder().build(),
                 configuration,
                 verificationContext,
                 new PrestoClusterConfig(),
@@ -77,8 +76,8 @@ public class TestDeterminismAnalyzer
                 sqlParser,
                 typeManager,
                 prestoAction,
-                ImmutableList.of(),
-                ImmutableMap.of(CONTROL, QualifiedName.of("tmp_verifier_c"), TEST, QualifiedName.of("tmp_verifier_t")));
+                ImmutableMap.of(CONTROL, QualifiedName.of("tmp_verifier_c"), TEST, QualifiedName.of("tmp_verifier_t")),
+                ImmutableMap.of());
         ChecksumValidator checksumValidator = createChecksumValidator(verifierConfig);
         SourceQuery sourceQuery = new SourceQuery("test", "", "", "", configuration, configuration);
 

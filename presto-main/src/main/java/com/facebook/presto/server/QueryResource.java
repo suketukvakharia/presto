@@ -22,6 +22,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.QueryId;
 import com.google.common.collect.ImmutableList;
 
+import javax.annotation.security.RolesAllowed;
 import javax.inject.Inject;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -38,12 +39,15 @@ import java.util.NoSuchElementException;
 
 import static com.facebook.presto.connector.system.KillQueryProcedure.createKillQueryException;
 import static com.facebook.presto.connector.system.KillQueryProcedure.createPreemptQueryException;
+import static com.facebook.presto.server.security.RoleType.ADMIN;
+import static com.facebook.presto.server.security.RoleType.USER;
 import static java.util.Objects.requireNonNull;
 
 /**
  * Manage queries scheduled on this node
  */
 @Path("/v1/query")
+@RolesAllowed({USER, ADMIN})
 public class QueryResource
 {
     // TODO There should be a combined interface for this
@@ -77,7 +81,7 @@ public class QueryResource
         requireNonNull(queryId, "queryId is null");
 
         try {
-            QueryInfo queryInfo = queryManager.getFullQueryInfo(queryId);
+            QueryInfo queryInfo = dispatchManager.getFullQueryInfo(queryId);
             return Response.ok(queryInfo).build();
         }
         catch (NoSuchElementException e) {
@@ -90,7 +94,7 @@ public class QueryResource
     public void cancelQuery(@PathParam("queryId") QueryId queryId)
     {
         requireNonNull(queryId, "queryId is null");
-        queryManager.cancelQuery(queryId);
+        dispatchManager.cancelQuery(queryId);
     }
 
     @PUT
@@ -112,17 +116,17 @@ public class QueryResource
         requireNonNull(queryId, "queryId is null");
 
         try {
-            QueryState state = queryManager.getQueryState(queryId);
+            BasicQueryInfo state = dispatchManager.getQueryInfo(queryId);
 
             // check before killing to provide the proper error code (this is racy)
-            if (state.isDone()) {
+            if (state.getState().isDone()) {
                 return Response.status(Status.CONFLICT).build();
             }
 
-            queryManager.failQuery(queryId, queryException);
+            dispatchManager.failQuery(queryId, queryException);
 
             // verify if the query was failed (if not, we lost the race)
-            if (!queryException.getErrorCode().equals(queryManager.getQueryInfo(queryId).getErrorCode())) {
+            if (!queryException.getErrorCode().equals(dispatchManager.getQueryInfo(queryId).getErrorCode())) {
                 return Response.status(Status.CONFLICT).build();
             }
 

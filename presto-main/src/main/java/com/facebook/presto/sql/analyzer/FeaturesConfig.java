@@ -69,6 +69,7 @@ public class FeaturesConfig
     private DataSize joinMaxBroadcastTableSize;
     private boolean colocatedJoinsEnabled = true;
     private boolean groupedExecutionForAggregationEnabled;
+    private boolean groupedExecutionForJoinEnabled = true;
     private boolean groupedExecutionForEligibleTableScansEnabled;
     private boolean dynamicScheduleForGroupedExecution;
     private boolean recoverableGroupedExecutionEnabled;
@@ -115,7 +116,9 @@ public class FeaturesConfig
     private int spillerThreads = 4;
     private double spillMaxUsedSpaceThreshold = 0.9;
     private boolean iterativeOptimizerEnabled = true;
+    private boolean runtimeOptimizerEnabled;
     private boolean enableStatsCalculator = true;
+    private boolean enableStatsCollectionForTemporaryTable;
     private boolean ignoreStatsCalculatorFailures = true;
     private boolean printStatsForNonJoinQuery;
     private boolean defaultFilterFactorEnabled;
@@ -150,6 +153,11 @@ public class FeaturesConfig
     private boolean listBuiltInFunctionsOnly = true;
     private boolean experimentalFunctionsEnabled;
     private boolean useLegacyScheduler = true;
+    private boolean optimizeCommonSubExpressions = true;
+    private boolean preferDistributedUnion = true;
+    private boolean optimizeNullsInJoin;
+
+    private String warnOnNoTableLayoutFilter = "";
 
     private PartitioningPrecisionStrategy partitioningPrecisionStrategy = PartitioningPrecisionStrategy.AUTOMATIC;
 
@@ -374,6 +382,19 @@ public class FeaturesConfig
     public FeaturesConfig setGroupedExecutionForAggregationEnabled(boolean groupedExecutionForAggregationEnabled)
     {
         this.groupedExecutionForAggregationEnabled = groupedExecutionForAggregationEnabled;
+        return this;
+    }
+
+    public boolean isGroupedExecutionForJoinEnabled()
+    {
+        return groupedExecutionForJoinEnabled;
+    }
+
+    @Config("grouped-execution-for-join-enabled")
+    @ConfigDescription("Experimental: Use grouped execution for join when possible")
+    public FeaturesConfig setGroupedExecutionForJoinEnabled(boolean groupedExecutionForJoinEnabled)
+    {
+        this.groupedExecutionForJoinEnabled = groupedExecutionForJoinEnabled;
         return this;
     }
 
@@ -743,6 +764,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isRuntimeOptimizerEnabled()
+    {
+        return runtimeOptimizerEnabled;
+    }
+
+    @Config("experimental.runtime-optimizer-enabled")
+    public FeaturesConfig setRuntimeOptimizerEnabled(boolean value)
+    {
+        this.runtimeOptimizerEnabled = value;
+        return this;
+    }
+
     public Duration getIterativeOptimizerTimeout()
     {
         return iterativeOptimizerTimeout;
@@ -760,10 +793,22 @@ public class FeaturesConfig
         return enableStatsCalculator;
     }
 
+    public boolean isEnableStatsCollectionForTemporaryTable()
+    {
+        return enableStatsCollectionForTemporaryTable;
+    }
+
     @Config("experimental.enable-stats-calculator")
     public FeaturesConfig setEnableStatsCalculator(boolean enableStatsCalculator)
     {
         this.enableStatsCalculator = enableStatsCalculator;
+        return this;
+    }
+
+    @Config("experimental.enable-stats-collection-for-temporary-table")
+    public FeaturesConfig setEnableStatsCollectionForTemporaryTable(boolean enableStatsCollectionForTemporaryTable)
+    {
+        this.enableStatsCollectionForTemporaryTable = enableStatsCollectionForTemporaryTable;
         return this;
     }
 
@@ -1221,6 +1266,55 @@ public class FeaturesConfig
     public FeaturesConfig setUseLegacyScheduler(boolean useLegacyScheduler)
     {
         this.useLegacyScheduler = useLegacyScheduler;
+        return this;
+    }
+
+    public boolean isOptimizeCommonSubExpressions()
+    {
+        return optimizeCommonSubExpressions;
+    }
+
+    @Config("optimize-common-sub-expressions")
+    @ConfigDescription("Extract and compute common sub expression in projections")
+    public FeaturesConfig setOptimizeCommonSubExpressions(boolean optimizeCommonSubExpressions)
+    {
+        this.optimizeCommonSubExpressions = optimizeCommonSubExpressions;
+        return this;
+    }
+
+    public boolean isPreferDistributedUnion()
+    {
+        return preferDistributedUnion;
+    }
+
+    @Config("prefer-distributed-union")
+    public FeaturesConfig setPreferDistributedUnion(boolean preferDistributedUnion)
+    {
+        this.preferDistributedUnion = preferDistributedUnion;
+        return this;
+    }
+
+    public boolean isOptimizeNullsInJoin()
+    {
+        return optimizeNullsInJoin;
+    }
+
+    @Config("optimize-nulls-in-join")
+    public FeaturesConfig setOptimizeNullsInJoin(boolean optimizeNullsInJoin)
+    {
+        this.optimizeNullsInJoin = optimizeNullsInJoin;
+        return this;
+    }
+
+    public String getWarnOnNoTableLayoutFilter()
+    {
+        return warnOnNoTableLayoutFilter;
+    }
+
+    @Config("warn-on-no-table-layout-filter")
+    public FeaturesConfig setWarnOnNoTableLayoutFilter(String warnOnNoTableLayoutFilter)
+    {
+        this.warnOnNoTableLayoutFilter = warnOnNoTableLayoutFilter;
         return this;
     }
 }

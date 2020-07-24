@@ -17,6 +17,7 @@ import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.HostAddress;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.schedule.NodeSelectionStrategy;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -28,7 +29,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 
+import static com.facebook.presto.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.SOFT_AFFINITY;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -55,6 +58,8 @@ public class HiveSplit
     private final Optional<BucketConversion> bucketConversion;
     private final boolean s3SelectPushdownEnabled;
     private final Optional<byte[]> extraFileInfo;
+    private final CacheQuotaRequirement cacheQuotaRequirement;
+    private final Optional<EncryptionInformation> encryptionInformation;
 
     @JsonCreator
     public HiveSplit(
@@ -75,7 +80,9 @@ public class HiveSplit
             @JsonProperty("partitionSchemaDifference") Map<Integer, Column> partitionSchemaDifference,
             @JsonProperty("bucketConversion") Optional<BucketConversion> bucketConversion,
             @JsonProperty("s3SelectPushdownEnabled") boolean s3SelectPushdownEnabled,
-            @JsonProperty("extraFileInfo") Optional<byte[]> extraFileInfo)
+            @JsonProperty("extraFileInfo") Optional<byte[]> extraFileInfo,
+            @JsonProperty("cacheQuota") CacheQuotaRequirement cacheQuotaRequirement,
+            @JsonProperty("encryptionMetadata") Optional<EncryptionInformation> encryptionInformation)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(length >= 0, "length must be positive");
@@ -93,6 +100,8 @@ public class HiveSplit
         requireNonNull(partitionSchemaDifference, "partitionSchemaDifference is null");
         requireNonNull(bucketConversion, "bucketConversion is null");
         requireNonNull(extraFileInfo, "extraFileInfo is null");
+        requireNonNull(cacheQuotaRequirement, "cacheQuotaRequirement is null");
+        requireNonNull(encryptionInformation, "encryptionMetadata is null");
 
         this.database = database;
         this.table = table;
@@ -112,6 +121,8 @@ public class HiveSplit
         this.bucketConversion = bucketConversion;
         this.s3SelectPushdownEnabled = s3SelectPushdownEnabled;
         this.extraFileInfo = extraFileInfo;
+        this.cacheQuotaRequirement = cacheQuotaRequirement;
+        this.encryptionInformation = encryptionInformation;
     }
 
     @JsonProperty
@@ -178,7 +189,7 @@ public class HiveSplit
     public List<HostAddress> getPreferredNodes(List<HostAddress> sortedCandidates)
     {
         if (sortedCandidates == null || sortedCandidates.isEmpty()) {
-            throw new RuntimeException("sortedCandidates is null or empty for HiveSplit");
+            throw new PrestoException(NO_NODES_AVAILABLE, "sortedCandidates is null or empty for HiveSplit");
         }
 
         if (getNodeSelectionStrategy() == SOFT_AFFINITY) {
@@ -242,6 +253,18 @@ public class HiveSplit
         return extraFileInfo;
     }
 
+    @JsonProperty
+    public CacheQuotaRequirement getCacheQuotaRequirement()
+    {
+        return cacheQuotaRequirement;
+    }
+
+    @JsonProperty
+    public Optional<EncryptionInformation> getEncryptionInformation()
+    {
+        return encryptionInformation;
+    }
+
     @Override
     public Object getInfo()
     {
@@ -256,7 +279,14 @@ public class HiveSplit
                 .put("nodeSelectionStrategy", nodeSelectionStrategy)
                 .put("partitionName", partitionName)
                 .put("s3SelectPushdownEnabled", s3SelectPushdownEnabled)
+                .put("cacheQuotaRequirement", cacheQuotaRequirement)
                 .build();
+    }
+
+    @Override
+    public OptionalLong getSplitSizeInBytes()
+    {
+        return OptionalLong.of(getLength());
     }
 
     @Override
@@ -268,6 +298,7 @@ public class HiveSplit
                 .addValue(length)
                 .addValue(fileSize)
                 .addValue(s3SelectPushdownEnabled)
+                .addValue(cacheQuotaRequirement)
                 .toString();
     }
 

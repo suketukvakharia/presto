@@ -15,13 +15,13 @@ package com.facebook.presto.tests;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.metadata.BuiltInFunction;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.SqlTimestampWithTimeZone;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.session.PropertyMetadata;
-import com.facebook.presto.spi.type.Decimals;
-import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import com.facebook.presto.sql.analyzer.SemanticException;
@@ -56,16 +56,17 @@ import java.util.stream.IntStream;
 import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_SORT;
 import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
+import static com.facebook.presto.SystemSessionProperties.OPTIMIZE_NULLS_IN_JOINS;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DecimalType.createDecimalType;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
+import static com.facebook.presto.common.type.VarcharType.createVarcharType;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.operator.scalar.ApplyFunction.APPLY_FUNCTION;
 import static com.facebook.presto.operator.scalar.InvokeFunction.INVOKE_FUNCTION;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.INVALID_PARAMETER_USAGE;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MUST_BE_AGGREGATE_OR_GROUP_BY;
 import static com.facebook.presto.sql.tree.ExplainType.Type.DISTRIBUTED;
@@ -103,7 +104,7 @@ public abstract class AbstractTestQueries
         extends AbstractTestQueryFramework
 {
     // We can just use the default type registry, since we don't use any parametric types
-    protected static final List<BuiltInFunction> CUSTOM_FUNCTIONS = new FunctionListBuilder()
+    public static final List<SqlFunction> CUSTOM_FUNCTIONS = new FunctionListBuilder()
             .aggregates(CustomSum.class)
             .window(CustomRank.class)
             .scalars(CustomAdd.class)
@@ -4224,6 +4225,7 @@ public abstract class AbstractTestQueries
                         "WITH a AS (SELECT * FROM orders) " +
                         "SELECT * FROM a",
                 "SELECT * FROM orders");
+        assertQuerySucceeds("WITH t(x, y, z) AS (TABLE region) SELECT * FROM t");
     }
 
     @Test
@@ -4595,6 +4597,14 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testLogicalExplainJsonFormat()
+    {
+        String query = "SELECT * FROM orders";
+        MaterializedResult result = computeActual("EXPLAIN (TYPE LOGICAL, FORMAT JSON) " + query);
+        assertEquals(getOnlyElement(result.getOnlyColumnAsSet()), getJsonExplainPlan(query, LOGICAL));
+    }
+
+    @Test
     public void testDistributedExplain()
     {
         String query = "SELECT * FROM orders";
@@ -4616,6 +4626,14 @@ public abstract class AbstractTestQueries
         String query = "SELECT * FROM orders";
         MaterializedResult result = computeActual("EXPLAIN (TYPE DISTRIBUTED, FORMAT GRAPHVIZ) " + query);
         assertEquals(getOnlyElement(result.getOnlyColumnAsSet()), getGraphvizExplainPlan(query, DISTRIBUTED));
+    }
+
+    @Test
+    public void testDistributedExplainJsonFormat()
+    {
+        String query = "SELECT * FROM orders";
+        MaterializedResult result = computeActual("EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON) " + query);
+        assertEquals(getOnlyElement(result.getOnlyColumnAsSet()), getJsonExplainPlan(query, DISTRIBUTED));
     }
 
     @Test
@@ -7043,9 +7061,9 @@ public abstract class AbstractTestQueries
     @Test
     public void testNonReservedTimeWords()
     {
-        assertQuery("" +
-                "SELECT TIME, TIMESTAMP, DATE, INTERVAL\n" +
-                "FROM (SELECT 1 TIME, 2 TIMESTAMP, 3 DATE, 4 INTERVAL)");
+        assertQuery(
+                "SELECT TIME, TIMESTAMP, DATE, INTERVAL FROM (SELECT 1 TIME, 2 TIMESTAMP, 3 DATE, 4 INTERVAL)",
+                "SELECT 1, 2, 3, 4");
     }
 
     @Test
@@ -8186,6 +8204,46 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testJoinsWithNulls()
+    {
+        Session sessionWithOptNulls = Session.builder(getSession())
+                .setSystemProperty(OPTIMIZE_NULLS_IN_JOINS, "true")
+                .build();
+        testJoinsWithNullsInternal(getSession());
+        testJoinsWithNullsInternal(sessionWithOptNulls);
+    }
+
+    private void testJoinsWithNullsInternal(Session session)
+    {
+        assertQuery(
+                session,
+                "SELECT * FROM (VALUES 2, 3, null) a(x) INNER JOIN (VALUES 3, 4, null) b(x) ON a.x = b.x",
+                "SELECT * FROM VALUES (3, 3)");
+
+        assertQuery(
+                session,
+                "SELECT * FROM (VALUES 2, 3, null) a(x) LEFT JOIN (VALUES 3, 4, null) b(x) ON a.x = b.x",
+                "SELECT * FROM VALUES (3, 3), (2, NULL), (NULL, NULL)");
+
+        assertQuery(
+                session,
+                "SELECT * FROM (VALUES 2, 3, null) a(x) RIGHT JOIN (VALUES 3, 4, null) b(x) ON a.x = b.x",
+                "SELECT * FROM VALUES (3, 3), (NULL, 4), (NULL, NULL)");
+
+        assertQuery(
+                session,
+                "SELECT * FROM (VALUES 2, 3, null) a(x) " +
+                        "FULL OUTER JOIN (VALUES 3, 4, null) b(x) ON a.x = b.x",
+                "SELECT * FROM VALUES (3, 3), (NULL, 4), (2, NULL), (NULL, NULL), (NULL, NULL)");
+
+        assertQuery(
+                session,
+                "SELECT * FROM (VALUES 2, 3, null) a(x) " +
+                        "FULL OUTER JOIN (VALUES 3, 4, null) b(x) ON a.x = b.x WHERE a.x IS NULL",
+                "SELECT * FROM VALUES (NULL, 4), (NULL, NULL), (NULL, NULL)");
+    }
+
+    @Test
     public void testPruningCountAggregationOverScalar()
     {
         assertQuery("SELECT COUNT(*) FROM (SELECT SUM(orderkey) FROM orders)");
@@ -8295,6 +8353,163 @@ public abstract class AbstractTestQueries
                         "    )" +
                         "FROM T",
                 "Values 1, 2, 2");
+    }
+
+    @Test
+    public void testLargeBytecode()
+    {
+        StringBuilder stringBuilder = new StringBuilder("SELECT x FROM (SELECT orderkey x, custkey y from orders limit 10) WHERE CASE true ");
+        // Generate 100 cases.
+        for (int i = 0; i < 100; i++) {
+            stringBuilder.append(" when x in (");
+            for (int j = 0; j < 20; j++) {
+                stringBuilder.append("random(" + (i * 100 + j) + "), ");
+            }
+
+            stringBuilder.append("random(" + i + ")) then x = random()");
+        }
+
+        stringBuilder.append("else x = random() end");
+        assertQueryFails(stringBuilder.toString(), "Query results in large bytecode exceeding the limits imposed by JVM|Compiler failed");
+    }
+
+    @Test
+    public void testInComplexTypes()
+    {
+        //test cases to trigger the SET_CONTAINS path of InCodeGenerator.java with complex types
+        StringBuilder query = new StringBuilder("select * from (values('a'), (null)) as t (name) where ROW('1', name) IN ( ");
+        for (int i = 2; i < 32; i++) {
+            query.append(String.format("ROW('1','%s'), ", i));
+        }
+        query.append("ROW('1', name), ROW('2',name), ROW('3',name))");
+        assertQuerySucceeds(query.toString());
+
+        query = new StringBuilder("select ROW(null_value) IN ( ");
+        for (int i = 0; i < 32; i++) {
+            query.append(String.format("ROW(%s), ", i));
+        }
+        query.append("ROW(32)) ");
+        query.append("FROM (values(null)) as t (null_value)");
+        assertQuery(query.toString(), "SELECT NULL");
+    }
+
+    @Test
+    public void testRowExpressionInterpreterStackOverflow()
+    {
+        StringBuilder stringBuilder = new StringBuilder("SELECT  CASE");
+        for (int i = 1; i <= 500; i++) {
+            stringBuilder.append(" when x = random(" + i + ") then " + i);
+        }
+
+        stringBuilder.append(" else x end from (select -1 x)");
+        assertQuery(stringBuilder.toString(), "values -1");
+    }
+
+    @Test
+    public void testSwitchOptimization()
+    {
+        assertQuery("select 1", "select 1");
+        assertQuery(
+                "SELECT CASE WHEN x = 1 THEN 1 WHEN x = 5 THEN 5 WHEN x = IF(RANDOM() >= 0, 3, 5) THEN 10 ELSE -1 END FROM (SELECT ORDERKEY x FROM orders where orderkey <= 10)",
+                "SELECT CASE x WHEN 1 THEN 1 WHEN 5 THEN 5 WHEN 3 THEN 10 ELSE -1 END FROM (SELECT ORDERKEY x FROM orders where orderkey <= 10)");
+
+        assertQuery(
+                "SELECT CASE x WHEN 1 THEN 1 WHEN 5 THEN 5 WHEN 3 THEN 10 ELSE -1 END FROM (SELECT ORDERKEY x FROM orders where orderkey <= 10)",
+                "SELECT CASE x WHEN 1 THEN 1 WHEN 5 THEN 5 WHEN 3 THEN 10 ELSE -1 END FROM (SELECT ORDERKEY x FROM orders where orderkey <= 10)");
+    }
+
+    @Test
+    public void testSwitchReturnsNull()
+    {
+        assertQuery(
+                "SELECT CASE true WHEN random() < 0 THEN true END",
+                "SELECT CAST(NULL AS BOOLEAN)");
+
+        assertQuery(
+                "SELECT TRUE AND CAST(NULL AS BOOLEAN) AND RANDOM() >= 0",
+                "SELECT CAST(NULL AS BOOLEAN)");
+
+        assertQuery(
+                "SELECT TRUE AND CAST(NULL AS BOOLEAN) AND RANDOM() < 0",
+                "SELECT FALSE");
+
+        assertQuery(
+                "SELECT TRUE AND CAST(NULL AS BOOLEAN) IS NULL AND RANDOM() >= 0",
+                "SELECT TRUE");
+
+        assertQuery(
+                "SELECT 1 = ALL (SELECT CAST(NULL AS INTEGER))",
+                "SELECT CAST(NULL AS BOOLEAN)");
+    }
+
+    @Test
+    public void testAndInFilter()
+    {
+        assertQuery(
+                "SELECT count() from (select * from orders where orderkey < 10) where ((orderkey > 100 and custkey > 100) or (orderkey > 200 and custkey < 200))",
+                "values 0");
+
+        assertQuery(
+                "SELECT ((orderkey > 100 and custkey > 100) or (orderkey > 200 and custkey < 200)) from (select * from orders where orderkey < 10 limit 1)",
+                "values false");
+    }
+
+    @Test
+    public void testSetAgg()
+    {
+        final String input = "(select 1 x, 2 y union all select 1 x, 2 y union all select 2 x, 1 y)";
+        assertQuery(
+                "select count() from (select set_agg(x) = array_distinct(array_agg(x)) equals" +
+                        " from " + input + " group by y) where equals",
+                "select count(distinct y) from " + input);
+
+        assertQuery(
+                "select count() from " +
+                        "(select set_agg(orderkey) = array_agg(distinct orderkey) eq from orders group by custkey) where eq",
+                "select count(distinct custkey) from orders");
+        assertQuery(
+                "select cardinality(set_agg(orderkey)) from orders",
+                "select count(distinct orderkey) from orders");
+
+        assertQuery(
+                "select count() from " +
+                        "(select set_agg(comment) = array_agg(distinct comment) eq from orders group by orderkey) where eq",
+                "select count(distinct orderkey) from orders");
+        assertQuery(
+                "select cardinality(set_agg(comment)) from orders",
+                "select count(distinct comment) from orders");
+
+        assertQuery(
+                "select count() from " +
+                        "(select set_agg(cast(orderdate as date)) = array_agg(distinct cast(orderdate as date)) eq from orders group by orderkey) where eq",
+                "select count(distinct orderkey) from orders");
+        assertQuery(
+                "select cardinality(set_agg(cast(orderdate as date))) from orders",
+                "select count(distinct orderdate) from orders");
+    }
+
+    @Test
+    public void testRedundantProjection()
+    {
+        assertQuery(
+                "SELECT x, reduce(x, 0, (s, x) -> s + x, s -> s), reduce(x, 0, (s, x) -> s + x, s -> s) FROM (VALUES (array[1, 2, 3])) t(x)",
+                "SELECT array[1, 2, 3], 6, 6");
+        assertQuery(
+                "SELECT x, filter(x, v -> date(v) BETWEEN date'2020-01-01' AND date'2020-06-30'), filter(x, v -> date(v) BETWEEN date'2020-01-01' AND date_add('day', 2, date'2020-06-28')) FROM (VALUES (array['2020-03-01', '2020-07-01'])) t(x)",
+                "SELECT array['2020-03-01', '2020-07-01'], array['2020-03-01'], array['2020-03-01']");
+        assertQuerySucceeds(
+                "SELECT DISTINCT null AS a, NULL AS b, orderstatus FROM (SELECT orderstatus FROM orders GROUP BY orderstatus)");
+    }
+
+    @Test
+    public void testComparisonWithLike()
+    {
+        assertQuery("SELECT t1.custkey, t2.comment " +
+                "FROM " +
+                "(SELECT * FROM orders WHERE (comment LIKE '%shipping_onsite%') = FALSE) t1 " +
+                "JOIN " +
+                "(SELECT * FROM orders WHERE (comment LIKE '%shipping_onsite%') = FALSE) t2 " +
+                "ON t1.orderkey=t2.orderkey");
     }
 
     protected Session noJoinReordering()

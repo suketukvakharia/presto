@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.raptor;
 
-import com.facebook.presto.raptor.filesystem.FileSystemContext;
+import com.facebook.presto.hive.HdfsContext;
 import com.facebook.presto.raptor.storage.StorageManager;
 import com.facebook.presto.raptor.storage.StorageManagerConfig;
 import com.facebook.presto.raptor.storage.organization.TemporalFunction;
@@ -55,11 +55,11 @@ public class RaptorPageSinkProvider
     @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorOutputTableHandle tableHandle, PageSinkProperties pageSinkProperties)
     {
-        checkArgument(!pageSinkProperties.isPartitionCommitRequired(), "Raptor connector does not support partition commit");
+        checkArgument(!pageSinkProperties.isCommitRequired(), "Raptor connector does not support page sink commit");
 
         RaptorOutputTableHandle handle = (RaptorOutputTableHandle) tableHandle;
         return new RaptorPageSink(
-                new FileSystemContext(session),
+                new HdfsContext(session, handle.getSchemaName(), handle.getTableName()),
                 pageSorter,
                 storageManager,
                 temporalFunction,
@@ -78,11 +78,11 @@ public class RaptorPageSinkProvider
     @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorInsertTableHandle tableHandle, PageSinkProperties pageSinkProperties)
     {
-        checkArgument(!pageSinkProperties.isPartitionCommitRequired(), "Raptor connector does not support partition commit");
+        checkArgument(!pageSinkProperties.isCommitRequired(), "Raptor connector does not support page sink commit");
 
         RaptorInsertTableHandle handle = (RaptorInsertTableHandle) tableHandle;
         return new RaptorPageSink(
-                new FileSystemContext(session),
+                new HdfsContext(session),
                 pageSorter,
                 storageManager,
                 temporalFunction,

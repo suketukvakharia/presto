@@ -15,9 +15,11 @@ package com.facebook.presto.raptor.filesystem;
 
 import com.facebook.presto.cache.CacheConfig;
 import com.facebook.presto.cache.CacheManager;
-import com.facebook.presto.cache.CachingFileSystem;
 import com.facebook.presto.cache.ForCachingFileSystem;
+import com.facebook.presto.cache.filemerge.FileMergeCachingFileSystem;
 import com.facebook.presto.hadoop.FileSystemFactory;
+import com.facebook.presto.hive.HdfsContext;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import com.facebook.presto.spi.PrestoException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -32,6 +34,7 @@ import java.util.function.BiFunction;
 
 import static com.facebook.presto.raptor.filesystem.FileSystemUtil.copy;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
 public class RaptorCachingHdfsConfiguration
@@ -53,16 +56,18 @@ public class RaptorCachingHdfsConfiguration
     }
 
     @Override
-    public Configuration getConfiguration(FileSystemContext context, URI uri)
+    public Configuration getConfiguration(HdfsContext context, URI uri)
     {
         @SuppressWarnings("resource")
         Configuration config = new CachingJobConf((factoryConfig, factoryUri) -> {
             try {
-                return new CachingFileSystem(
+                FileSystem fileSystem = (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri));
+                checkState(fileSystem instanceof ExtendedFileSystem);
+                return new FileMergeCachingFileSystem(
                         factoryUri,
                         factoryConfig,
                         cacheManager,
-                        (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri)),
+                        (ExtendedFileSystem) fileSystem,
                         cacheValidationEnabled);
             }
             catch (IOException e) {

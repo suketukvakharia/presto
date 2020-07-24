@@ -18,7 +18,6 @@ import com.google.inject.Module;
 import com.google.inject.Scopes;
 
 import static com.facebook.airlift.configuration.ConfigBinder.configBinder;
-import static com.facebook.airlift.http.client.HttpClientBinder.httpClientBinder;
 
 public class DruidModule
         implements Module
@@ -30,6 +29,7 @@ public class DruidModule
     @Override
     public void configure(Binder binder)
     {
+        configBinder(binder).bindConfig(DruidConfig.class);
         binder.bind(DruidConnector.class).in(Scopes.SINGLETON);
         binder.bind(DruidMetadata.class).in(Scopes.SINGLETON);
         binder.bind(DruidHandleResolver.class).in(Scopes.SINGLETON);
@@ -38,8 +38,6 @@ public class DruidModule
         binder.bind(DruidSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(DruidPageSourceProvider.class).in(Scopes.SINGLETON);
         binder.bind(DruidQueryGenerator.class).in(Scopes.SINGLETON);
-
-        configBinder(binder).bindConfig(DruidConfig.class);
-        httpClientBinder(binder).bindHttpClient("druid-client", ForDruidClient.class);
+        binder.bind(DruidSessionProperties.class).in(Scopes.SINGLETON);
     }
 }

@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.type.StandardTypes;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.Description;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlType;
-import com.facebook.presto.spi.type.StandardTypes;
 import com.google.common.net.InetAddresses;
 import io.airlift.slice.Slice;
 
@@ -134,7 +134,7 @@ public final class IpPrefixFunctions
     @SqlType(StandardTypes.BOOLEAN)
     public static boolean isPrefixSubnetOf(@SqlType(StandardTypes.IPPREFIX) Slice first, @SqlType(StandardTypes.IPPREFIX) Slice second)
     {
-        return between(ipSubnetMin(second), ipSubnetMin(first), ipSubnetMax(first));
+        return between(ipSubnetMin(second), ipSubnetMin(first), ipSubnetMax(first)) && between(ipSubnetMax(second), ipSubnetMin(first), ipSubnetMax(first));
     }
 
     private static InetAddress toInetAddress(Slice ipAddress)

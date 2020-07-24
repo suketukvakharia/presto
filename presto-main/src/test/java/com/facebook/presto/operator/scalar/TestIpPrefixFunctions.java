@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.spi.type.ArrayType;
+import com.facebook.presto.common.type.ArrayType;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.Test;
 
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.type.IpAddressType.IPADDRESS;
 import static com.facebook.presto.type.IpPrefixType.IPPREFIX;
 
@@ -113,5 +113,9 @@ public class TestIpPrefixFunctions
         assertFunction("IS_SUBNET_OF(IPPREFIX '1.2.3.128/26', IPPREFIX '1.2.3.128/26')", BOOLEAN, true);
         assertFunction("IS_SUBNET_OF(IPPREFIX '64:ff9b::17/64', IPPREFIX '64:ff9b::ff:25/80')", BOOLEAN, true);
         assertFunction("IS_SUBNET_OF(IPPREFIX '64:ff9b::17/64', IPPREFIX '64:ffff::17/64')", BOOLEAN, false);
+        assertFunction("IS_SUBNET_OF(IPPREFIX '2804:431:b000::/37', IPPREFIX '2804:431:b000::/38')", BOOLEAN, true);
+        assertFunction("IS_SUBNET_OF(IPPREFIX '2804:431:b000::/38', IPPREFIX '2804:431:b000::/37')", BOOLEAN, false);
+        assertFunction("IS_SUBNET_OF(IPPREFIX '170.0.52.0/22', IPPREFIX '170.0.52.0/24')", BOOLEAN, true);
+        assertFunction("IS_SUBNET_OF(IPPREFIX '170.0.52.0/24', IPPREFIX '170.0.52.0/22')", BOOLEAN, false);
     }
 }

@@ -23,29 +23,30 @@ import com.esri.core.geometry.Point;
 import com.esri.core.geometry.Polyline;
 import com.esri.core.geometry.ogc.OGCConcreteGeometryCollection;
 import com.esri.core.geometry.ogc.OGCGeometry;
-import com.esri.core.geometry.ogc.OGCGeometryCollection;
 import com.esri.core.geometry.ogc.OGCLineString;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.type.IntegerType;
+import com.facebook.presto.common.type.KdbTreeType;
 import com.facebook.presto.geospatial.GeometryType;
 import com.facebook.presto.geospatial.KdbTree;
 import com.facebook.presto.geospatial.Rectangle;
 import com.facebook.presto.geospatial.serde.EsriGeometrySerde;
 import com.facebook.presto.geospatial.serde.GeometrySerializationType;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.Description;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.KdbTreeType;
 import com.google.common.base.Joiner;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Streams;
 import io.airlift.slice.BasicSliceInput;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.CoordinateSequence;
 import org.locationtech.jts.geom.Geometry;
@@ -57,9 +58,7 @@ import org.locationtech.jts.geom.TopologyException;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
@@ -76,6 +75,13 @@ import static com.esri.core.geometry.NonSimpleResult.Reason.OGCDisconnectedInter
 import static com.esri.core.geometry.NonSimpleResult.Reason.OGCPolygonSelfTangency;
 import static com.esri.core.geometry.NonSimpleResult.Reason.OGCPolylineSelfTangency;
 import static com.esri.core.geometry.ogc.OGCGeometry.createFromEsriGeometry;
+import static com.facebook.presto.common.type.StandardTypes.BIGINT;
+import static com.facebook.presto.common.type.StandardTypes.BOOLEAN;
+import static com.facebook.presto.common.type.StandardTypes.DOUBLE;
+import static com.facebook.presto.common.type.StandardTypes.INTEGER;
+import static com.facebook.presto.common.type.StandardTypes.TINYINT;
+import static com.facebook.presto.common.type.StandardTypes.VARBINARY;
+import static com.facebook.presto.common.type.StandardTypes.VARCHAR;
 import static com.facebook.presto.geospatial.GeometryType.LINE_STRING;
 import static com.facebook.presto.geospatial.GeometryType.MULTI_LINE_STRING;
 import static com.facebook.presto.geospatial.GeometryType.MULTI_POINT;
@@ -88,6 +94,7 @@ import static com.facebook.presto.geospatial.GeometryUtils.createJtsEmptyPolygon
 import static com.facebook.presto.geospatial.GeometryUtils.createJtsLineString;
 import static com.facebook.presto.geospatial.GeometryUtils.createJtsMultiPoint;
 import static com.facebook.presto.geospatial.GeometryUtils.createJtsPoint;
+import static com.facebook.presto.geospatial.GeometryUtils.flattenCollection;
 import static com.facebook.presto.geospatial.GeometryUtils.getGeometryInvalidReason;
 import static com.facebook.presto.geospatial.GeometryUtils.getPointCount;
 import static com.facebook.presto.geospatial.GeometryUtils.jtsGeometryFromWkt;
@@ -99,14 +106,8 @@ import static com.facebook.presto.geospatial.serde.JtsGeometrySerde.serialize;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY_TYPE_NAME;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.spi.type.StandardTypes.BIGINT;
-import static com.facebook.presto.spi.type.StandardTypes.BOOLEAN;
-import static com.facebook.presto.spi.type.StandardTypes.DOUBLE;
-import static com.facebook.presto.spi.type.StandardTypes.INTEGER;
-import static com.facebook.presto.spi.type.StandardTypes.TINYINT;
-import static com.facebook.presto.spi.type.StandardTypes.VARBINARY;
-import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.lang.Double.isInfinite;
@@ -414,7 +415,7 @@ public final class GeoFunctions
     {
         try {
             Geometry geometry = deserialize(input);
-            return utf8Slice(getGeometryInvalidReason(geometry));
+            return getGeometryInvalidReason(geometry).map(Slices::utf8Slice).orElse(null);
         }
         catch (PrestoException e) {
             if (e.getCause() instanceof TopologyException) {
@@ -1153,6 +1154,21 @@ public final class GeoFunctions
         return EsriGeometrySerde.getGeometryType(input).standardName();
     }
 
+    @Description("Recursively flattens GeometryCollections")
+    @ScalarFunction("flatten_geometry_collections")
+    @SqlType("array(" + GEOMETRY_TYPE_NAME + ")")
+    public static Block flattenGeometryCollections(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
+    {
+        OGCGeometry geometry = EsriGeometrySerde.deserialize(input);
+        List<OGCGeometry> components = Streams.stream(
+                flattenCollection(geometry)).collect(toImmutableList());
+        BlockBuilder blockBuilder = GEOMETRY.createBlockBuilder(null, components.size());
+        for (OGCGeometry component : components) {
+            GEOMETRY.writeSlice(blockBuilder, EsriGeometrySerde.serialize(component));
+        }
+        return blockBuilder.build();
+    }
+
     @ScalarFunction
     @SqlNullable
     @Description("Returns an array of spatial partition IDs for a given geometry")
@@ -1298,54 +1314,5 @@ public final class GeoFunctions
                 return GEOMETRY.getSlice(block, iteratorPosition++);
             }
         };
-    }
-
-    private static Iterable<OGCGeometry> flattenCollection(OGCGeometry geometry)
-    {
-        if (geometry == null) {
-            return ImmutableList.of();
-        }
-        if (!(geometry instanceof OGCConcreteGeometryCollection)) {
-            return ImmutableList.of(geometry);
-        }
-        if (((OGCConcreteGeometryCollection) geometry).numGeometries() == 0) {
-            return ImmutableList.of();
-        }
-        return () -> new GeometryCollectionIterator(geometry);
-    }
-
-    private static class GeometryCollectionIterator
-            implements Iterator<OGCGeometry>
-    {
-        private final Deque<OGCGeometry> geometriesDeque = new ArrayDeque<>();
-
-        GeometryCollectionIterator(OGCGeometry geometries)
-        {
-            geometriesDeque.push(requireNonNull(geometries, "geometries is null"));
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            if (geometriesDeque.isEmpty()) {
-                return false;
-            }
-            while (geometriesDeque.peek() instanceof OGCConcreteGeometryCollection) {
-                OGCGeometryCollection collection = (OGCGeometryCollection) geometriesDeque.pop();
-                for (int i = 0; i < collection.numGeometries(); i++) {
-                    geometriesDeque.push(collection.geometryN(i));
-                }
-            }
-            return !geometriesDeque.isEmpty();
-        }
-
-        @Override
-        public OGCGeometry next()
-        {
-            if (!hasNext()) {
-                throw new NoSuchElementException("Geometries have been consumed");
-            }
-            return geometriesDeque.pop();
-        }
     }
 }

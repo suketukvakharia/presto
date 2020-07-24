@@ -14,7 +14,12 @@
 package com.facebook.presto.metadata;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.spi.CatalogSchemaName;
+import com.facebook.presto.common.CatalogSchemaName;
+import com.facebook.presto.common.block.BlockEncodingSerde;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeSignature;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
@@ -24,13 +29,12 @@ import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.TableLayoutFilterCoverage;
 import com.facebook.presto.spi.api.Experimental;
-import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.function.SqlFunction;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -38,9 +42,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
@@ -52,6 +53,8 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 
+import static com.facebook.presto.spi.TableLayoutFilterCoverage.NOT_APPLICABLE;
+
 public interface Metadata
 {
     void verifyComparableOrderableContract();
@@ -60,7 +63,7 @@ public interface Metadata
 
     List<SqlFunction> listFunctions(Session session);
 
-    void registerBuiltInFunctions(List<? extends BuiltInFunction> functions);
+    void registerBuiltInFunctions(List<? extends SqlFunction> functions);
 
     boolean schemaExists(Session session, CatalogSchemaName schema);
 
@@ -160,6 +163,11 @@ public interface Metadata
      * @throws RuntimeException if table or column handles are no longer valid
      */
     ColumnMetadata getColumnMetadata(Session session, TableHandle tableHandle, ColumnHandle columnHandle);
+
+    /**
+     * Returns a TupleDomain of constraints that is suitable for ExplainIO
+     */
+    TupleDomain<ColumnHandle> toExplainIOConstraints(Session session, TableHandle tableHandle, TupleDomain<ColumnHandle> constraints);
 
     /**
      * Gets the metadata for all columns that match the specified table prefix.
@@ -415,16 +423,16 @@ public interface Metadata
     List<GrantInfo> listTablePrivileges(Session session, QualifiedTablePrefix prefix);
 
     /**
-     * Commits partition for table creation.
+     * Commits page sink for table creation.
      */
     @Experimental
-    ListenableFuture<Void> commitPartitionAsync(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments);
+    ListenableFuture<Void> commitPageSinkAsync(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments);
 
     /**
-     * Commits partition for table insertion.
+     * Commits page sink for table insertion.
      */
     @Experimental
-    ListenableFuture<Void> commitPartitionAsync(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments);
+    ListenableFuture<Void> commitPageSinkAsync(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments);
 
     FunctionManager getFunctionManager();
 
@@ -445,4 +453,13 @@ public interface Metadata
     AnalyzePropertyManager getAnalyzePropertyManager();
 
     Set<ConnectorCapabilities> getConnectorCapabilities(Session session, ConnectorId catalogName);
+
+    /**
+     * Check if there is filter coverage of the specified partitioning keys
+     * @return NOT_APPLICABLE if partitioning is unsupported, not applicable, or the partitioning key is not relevant, NONE or COVERED otherwise
+     */
+    default TableLayoutFilterCoverage getTableLayoutFilterCoverage(Session session, TableHandle tableHandle, Set<String> relevantPartitionColumn)
+    {
+        return NOT_APPLICABLE;
+    }
 }

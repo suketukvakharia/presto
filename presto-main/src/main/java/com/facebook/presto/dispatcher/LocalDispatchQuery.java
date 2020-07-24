@@ -15,9 +15,11 @@ package com.facebook.presto.dispatcher;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.presto.Session;
+import com.facebook.presto.event.QueryMonitor;
 import com.facebook.presto.execution.ClusterSizeMonitor;
 import com.facebook.presto.execution.ExecutionFailureInfo;
 import com.facebook.presto.execution.QueryExecution;
+import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryState;
 import com.facebook.presto.execution.QueryStateMachine;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
@@ -62,6 +64,7 @@ public class LocalDispatchQuery
 
     public LocalDispatchQuery(
             QueryStateMachine stateMachine,
+            QueryMonitor queryMonitor,
             ListenableFuture<QueryExecution> queryExecutionFuture,
             ClusterSizeMonitor clusterSizeMonitor,
             Executor queryExecutor,
@@ -73,7 +76,10 @@ public class LocalDispatchQuery
         this.queryExecutor = requireNonNull(queryExecutor, "queryExecutor is null");
         this.querySubmitter = requireNonNull(querySubmitter, "querySubmitter is null");
 
-        addExceptionCallback(queryExecutionFuture, stateMachine::transitionToFailed);
+        addExceptionCallback(queryExecutionFuture, throwable -> {
+            stateMachine.transitionToFailed(throwable);
+            queryMonitor.queryImmediateFailureEvent(stateMachine.getBasicQueryInfo(Optional.empty()), toFailure(throwable));
+        });
         stateMachine.addStateChangeListener(state -> {
             if (state.isDone()) {
                 submitted.set(null);
@@ -222,6 +228,14 @@ public class LocalDispatchQuery
     }
 
     @Override
+    public QueryInfo getQueryInfo()
+    {
+        return tryGetQueryExecution()
+                .map(QueryExecution::getQueryInfo)
+                .orElse(stateMachine.getQueryInfo(Optional.empty()));
+    }
+
+    @Override
     public Session getSession()
     {
         return stateMachine.getSession();
@@ -262,7 +276,7 @@ public class LocalDispatchQuery
         try {
             return tryGetFutureValue(queryExecutionFuture);
         }
-        catch (Exception ignored) {
+        catch (Throwable ignored) {
             return Optional.empty();
         }
     }

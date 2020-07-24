@@ -31,8 +31,8 @@ import static org.testng.Assert.assertFalse;
 public class AbstractTestPrestoQueryFailureResolver
 {
     protected static final long CONTROL_CPU_TIME_MILLIS = 100000;
-    protected static final long CONTROL_PEAK_MEMORY_BYTES = 600L * 1024 * 1024 * 1024;
-    protected static final QueryStats CONTROL_QUERY_STATS = createQueryStats(CONTROL_CPU_TIME_MILLIS, CONTROL_PEAK_MEMORY_BYTES);
+    protected static final long CONTROL_PEAK_TOTAL_MEMORY_BYTES = 600L * 1024 * 1024 * 1024;
+    protected static final QueryStats CONTROL_QUERY_STATS = createQueryStats(CONTROL_CPU_TIME_MILLIS, CONTROL_PEAK_TOTAL_MEMORY_BYTES);
 
     private final FailureResolver failureResolver;
 
@@ -44,14 +44,14 @@ public class AbstractTestPrestoQueryFailureResolver
     @Test
     public void testSetupFailure()
     {
-        assertFalse(failureResolver.resolve(
+        assertFalse(failureResolver.resolveQueryFailure(
                 CONTROL_QUERY_STATS,
                 new PrestoQueryException(
                         new RuntimeException(),
                         false,
                         TEST_SETUP,
                         Optional.of(EXCEEDED_GLOBAL_MEMORY_LIMIT),
-                        Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS, CONTROL_PEAK_MEMORY_BYTES / 2))),
+                        Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS, CONTROL_PEAK_TOTAL_MEMORY_BYTES / 2))),
                 Optional.empty())
                 .isPresent());
     }
@@ -59,7 +59,7 @@ public class AbstractTestPrestoQueryFailureResolver
     @Test
     public void testClusterConnectionFailure()
     {
-        assertFalse(failureResolver.resolve(
+        assertFalse(failureResolver.resolveQueryFailure(
                 CONTROL_QUERY_STATS,
                 new ClusterConnectionException(new SocketTimeoutException(), TEST_MAIN),
                 Optional.empty())
@@ -69,7 +69,7 @@ public class AbstractTestPrestoQueryFailureResolver
     @Test
     public void testNoQueryStats()
     {
-        assertFalse(failureResolver.resolve(
+        assertFalse(failureResolver.resolveQueryFailure(
                 CONTROL_QUERY_STATS,
                 new PrestoQueryException(
                         new RuntimeException(),
@@ -84,7 +84,7 @@ public class AbstractTestPrestoQueryFailureResolver
     @Test
     public void testUnrelatedErrorCode()
     {
-        assertFalse(failureResolver.resolve(
+        assertFalse(failureResolver.resolveQueryFailure(
                 CONTROL_QUERY_STATS,
                 new PrestoQueryException(
                         new RuntimeException(),
@@ -101,8 +101,8 @@ public class AbstractTestPrestoQueryFailureResolver
         return failureResolver;
     }
 
-    protected static QueryStats createQueryStats(long cpuTimeMillls, long peakMemoryBytes)
+    protected static QueryStats createQueryStats(long cpuTimeMillls, long peakTotalMemoryBytes)
     {
-        return new QueryStats("id", "", false, false, 1, 2, 3, 4, 5, cpuTimeMillls, 7, 8, 9, 10, 11, peakMemoryBytes, Optional.empty());
+        return new QueryStats("id", "", false, false, 1, 2, 3, 4, 5, cpuTimeMillls, 7, 8, 9, 10, 11, 12, peakTotalMemoryBytes, 13, Optional.empty());
     }
 }

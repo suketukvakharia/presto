@@ -57,7 +57,8 @@ statement
     | ALTER TABLE tableName=qualifiedName
         ADD COLUMN column=columnDefinition                             #addColumn
     | ANALYZE qualifiedName (WITH properties)?                         #analyze
-    | CREATE (OR REPLACE)? VIEW qualifiedName AS query                 #createView
+    | CREATE (OR REPLACE)? VIEW qualifiedName
+            (SECURITY (DEFINER | INVOKER))? AS query                       #createView
     | DROP VIEW (IF EXISTS)? qualifiedName                             #dropView
     | CREATE (OR REPLACE)? FUNCTION functionName=qualifiedName
         '(' (sqlParameterDeclaration (',' sqlParameterDeclaration)*)? ')'
@@ -96,6 +97,7 @@ statement
         ('(' explainOption (',' explainOption)* ')')? statement        #explain
     | SHOW CREATE TABLE qualifiedName                                  #showCreateTable
     | SHOW CREATE VIEW qualifiedName                                   #showCreateView
+    | SHOW CREATE FUNCTION qualifiedName types?                        #showCreateFunction
     | SHOW TABLES ((FROM | IN) qualifiedName)?
         (LIKE pattern=string (ESCAPE escape=string)?)?                 #showTables
     | SHOW SCHEMAS ((FROM | IN) identifier)?
@@ -108,7 +110,8 @@ statement
     | SHOW ROLE GRANTS ((FROM | IN) identifier)?                       #showRoleGrants
     | DESCRIBE qualifiedName                                           #showColumns
     | DESC qualifiedName                                               #showColumns
-    | SHOW FUNCTIONS                                                   #showFunctions
+    | SHOW FUNCTIONS
+        (LIKE pattern=string (ESCAPE escape=string)?)?                 #showFunctions
     | SHOW SESSION                                                     #showSession
     | SET SESSION qualifiedName EQ expression                          #setSession
     | RESET SESSION qualifiedName                                      #resetSession
@@ -175,14 +178,20 @@ alterRoutineCharacteristic
 
 routineBody
     : returnStatement
+    | externalBodyReference
     ;
 
 returnStatement
     : RETURN expression
     ;
 
+externalBodyReference
+    : EXTERNAL (NAME externalRoutineName)?
+    ;
+
 language
     : SQL
+    | identifier
     ;
 
 determinism
@@ -194,6 +203,9 @@ nullCallClause
     | CALLED ON NULL INPUT
     ;
 
+externalRoutineName
+    : identifier
+    ;
 
 queryNoWith:
       queryTerm
@@ -538,20 +550,20 @@ nonReserved
     : ADD | ADMIN | ALL | ANALYZE | ANY | ARRAY | ASC | AT
     | BERNOULLI
     | CALL | CALLED | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT | CURRENT_ROLE
-    | DATA | DATE | DAY | DESC | DETERMINISTIC | DISTRIBUTED
-    | EXCLUDING | EXPLAIN
+    | DATA | DATE | DAY | DEFINER | DESC | DETERMINISTIC | DISTRIBUTED
+    | EXCLUDING | EXPLAIN | EXTERNAL
     | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
     | GRANT | GRANTED | GRANTS | GRAPHVIZ
     | HOUR
-    | IF | IGNORE | INCLUDING | INPUT | INTERVAL | IO | ISOLATION
+    | IF | IGNORE | INCLUDING | INPUT | INTERVAL | INVOKER | IO | ISOLATION
     | JSON
     | LANGUAGE | LAST | LATERAL | LEVEL | LIMIT | LOGICAL
     | MAP | MINUTE | MONTH
-    | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
+    | NAME | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
     | ONLY | OPTION | ORDINALITY | OUTPUT | OVER
     | PARTITION | PARTITIONS | POSITION | PRECEDING | PRIVILEGES | PROPERTIES
     | RANGE | READ | RENAME | REPEATABLE | REPLACE | RESET | RESPECT | RESTRICT | RETURN | RETURNS | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
-    | SCHEMA | SCHEMAS | SECOND | SERIALIZABLE | SESSION | SET | SETS | SQL
+    | SCHEMA | SCHEMAS | SECOND | SECURITY | SERIALIZABLE | SESSION | SET | SETS | SQL
     | SHOW | SOME | START | STATS | SUBSTRING | SYSTEM
     | TABLES | TABLESAMPLE | TEXT | TIME | TIMESTAMP | TO | TRANSACTION | TRY_CAST | TYPE
     | UNBOUNDED | UNCOMMITTED | USE | USER
@@ -600,6 +612,7 @@ DATA: 'DATA';
 DATE: 'DATE';
 DAY: 'DAY';
 DEALLOCATE: 'DEALLOCATE';
+DEFINER: 'DEFINER';
 DELETE: 'DELETE';
 DESC: 'DESC';
 DESCRIBE: 'DESCRIBE';
@@ -616,6 +629,7 @@ EXECUTE: 'EXECUTE';
 EXISTS: 'EXISTS';
 EXPLAIN: 'EXPLAIN';
 EXTRACT: 'EXTRACT';
+EXTERNAL: 'EXTERNAL';
 FALSE: 'FALSE';
 FILTER: 'FILTER';
 FIRST: 'FIRST';
@@ -644,6 +658,7 @@ INSERT: 'INSERT';
 INTERSECT: 'INTERSECT';
 INTERVAL: 'INTERVAL';
 INTO: 'INTO';
+INVOKER: 'INVOKER';
 IO: 'IO';
 IS: 'IS';
 ISOLATION: 'ISOLATION';
@@ -662,6 +677,7 @@ LOGICAL: 'LOGICAL';
 MAP: 'MAP';
 MINUTE: 'MINUTE';
 MONTH: 'MONTH';
+NAME: 'NAME';
 NATURAL: 'NATURAL';
 NFC : 'NFC';
 NFD : 'NFD';
@@ -712,6 +728,7 @@ ROWS: 'ROWS';
 SCHEMA: 'SCHEMA';
 SCHEMAS: 'SCHEMAS';
 SECOND: 'SECOND';
+SECURITY: 'SECURITY';
 SELECT: 'SELECT';
 SERIALIZABLE: 'SERIALIZABLE';
 SESSION: 'SESSION';

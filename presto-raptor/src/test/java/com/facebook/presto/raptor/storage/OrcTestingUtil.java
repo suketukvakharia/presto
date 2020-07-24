@@ -14,6 +14,7 @@
 package com.facebook.presto.raptor.storage;
 
 import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
@@ -25,12 +26,13 @@ import com.facebook.presto.orc.OrcPredicate;
 import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.orc.OrcReaderOptions;
 import com.facebook.presto.orc.OrcWriterStats;
-import com.facebook.presto.orc.OutputStreamOrcDataSink;
+import com.facebook.presto.orc.OutputStreamDataSink;
 import com.facebook.presto.orc.StorageStripeMetadataSource;
 import com.facebook.presto.orc.cache.StorageOrcFileTailSource;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.raptor.RaptorOrcAggregatedMemoryContext;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.type.TypeRegistry;
+import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
 import org.joda.time.DateTimeZone;
 
@@ -42,8 +44,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
-import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.orc.DwrfEncryptionProvider.NO_ENCRYPTION;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
 import static com.facebook.presto.orc.OrcReader.MAX_BATCH_SIZE;
 import static com.facebook.presto.orc.metadata.CompressionKind.ZSTD;
@@ -69,8 +70,10 @@ final class OrcTestingUtil
                 ORC,
                 new StorageOrcFileTailSource(),
                 new StorageStripeMetadataSource(),
+                new RaptorOrcAggregatedMemoryContext(),
                 createDefaultTestConfig(),
-                DEFAULT_HIVE_FILE_CONTEXT);
+                false,
+                NO_ENCRYPTION);
 
         List<String> columnNames = orcReader.getColumnNames();
         assertEquals(columnNames.size(), columnIds.size());
@@ -98,8 +101,9 @@ final class OrcTestingUtil
                 storageTypeConverter.toStorageTypes(includedColumns),
                 OrcPredicate.TRUE,
                 DateTimeZone.UTC,
-                newSimpleAggregatedMemoryContext(),
-                MAX_BATCH_SIZE);
+                new RaptorOrcAggregatedMemoryContext(),
+                MAX_BATCH_SIZE,
+                ImmutableMap.of());
     }
 
     public static byte[] octets(int... values)
@@ -123,7 +127,7 @@ final class OrcTestingUtil
     {
         TypeRegistry typeManager = new TypeRegistry();
         new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
-        return new OrcFileWriter(columnIds, columnTypes, new OutputStreamOrcDataSink(new FileOutputStream(file)), true, true, new OrcWriterStats(), typeManager, ZSTD);
+        return new OrcFileWriter(columnIds, columnTypes, new OutputStreamDataSink(new FileOutputStream(file)), true, true, new OrcWriterStats(), typeManager, ZSTD);
     }
 
     public static OrcReaderOptions createDefaultTestConfig()

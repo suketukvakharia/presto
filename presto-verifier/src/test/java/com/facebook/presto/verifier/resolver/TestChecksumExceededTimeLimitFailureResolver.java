@@ -34,14 +34,14 @@ public class TestChecksumExceededTimeLimitFailureResolver
     public void testResolved()
     {
         assertEquals(
-                getFailureResolver().resolve(
+                getFailureResolver().resolveQueryFailure(
                         CONTROL_QUERY_STATS,
                         new PrestoQueryException(
                                 new RuntimeException(),
                                 false,
                                 CONTROL_CHECKSUM,
                                 Optional.of(EXCEEDED_TIME_LIMIT),
-                                Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS / 2, CONTROL_PEAK_MEMORY_BYTES))),
+                                Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS / 2, CONTROL_PEAK_TOTAL_MEMORY_BYTES))),
                         Optional.empty()),
                 Optional.of("Time limit exceeded when running control checksum query"));
     }

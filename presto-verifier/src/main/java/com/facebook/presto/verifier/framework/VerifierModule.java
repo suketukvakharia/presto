@@ -15,17 +15,16 @@ package com.facebook.presto.verifier.framework;
 
 import com.facebook.airlift.configuration.AbstractConfigurationAwareModule;
 import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.common.block.BlockEncoding;
+import com.facebook.presto.common.block.BlockEncodingSerde;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.HandleJsonModule;
-import com.facebook.presto.spi.block.BlockEncoding;
-import com.facebook.presto.spi.block.BlockEncodingSerde;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
-import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.transaction.ForTransactionManager;
 import com.facebook.presto.transaction.InMemoryTransactionManager;
 import com.facebook.presto.transaction.TransactionManager;
@@ -85,18 +84,15 @@ public class VerifierModule
     private final SqlParserOptions sqlParserOptions;
     private final List<Class<? extends Predicate<SourceQuery>>> customQueryFilterClasses;
     private final SqlExceptionClassifier exceptionClassifier;
-    private final List<Property> tablePropertyOverrides;
 
     public VerifierModule(
             SqlParserOptions sqlParserOptions,
             List<Class<? extends Predicate<SourceQuery>>> customQueryFilterClasses,
-            SqlExceptionClassifier exceptionClassifier,
-            List<Property> tablePropertyOverrides)
+            SqlExceptionClassifier exceptionClassifier)
     {
         this.sqlParserOptions = requireNonNull(sqlParserOptions, "sqlParserOptions is null");
         this.customQueryFilterClasses = ImmutableList.copyOf(customQueryFilterClasses);
         this.exceptionClassifier = requireNonNull(exceptionClassifier, "exceptionClassifier is null");
-        this.tablePropertyOverrides = requireNonNull(tablePropertyOverrides, "tablePropertyOverrides is null");
     }
 
     protected final void setup(Binder binder)
@@ -154,7 +150,6 @@ public class VerifierModule
         columnValidatorBinder.addBinding(ROW).to(RowColumnValidator.class).in(SINGLETON);
         columnValidatorBinder.addBinding(MAP).to(MapColumnValidator.class).in(SINGLETON);
         binder.bind(new TypeLiteral<List<Predicate<SourceQuery>>>() {}).toProvider(new CustomQueryFilterProvider(customQueryFilterClasses));
-        binder.bind(new TypeLiteral<List<Property>>() {}).toInstance(tablePropertyOverrides);
     }
 
     private static class CustomQueryFilterProvider

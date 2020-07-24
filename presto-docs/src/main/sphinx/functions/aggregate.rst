@@ -143,6 +143,10 @@ General Aggregate Functions
 
     The state type must be a boolean, integer, floating-point, or date/time/interval.
 
+.. function:: set_agg(x) -> array<[same as input]>
+
+        Returns an array created from the distinct input ``x`` elements.
+
 .. function:: sum(x) -> [same as input]
 
     Returns the sum of all input values.
@@ -267,6 +271,11 @@ Approximate Aggregate Functions
     :noindex:
 
     See :doc:`hyperloglog`.
+
+.. function:: khyperloglog_agg(x) -> KHyperLogLog
+    :noindex:
+
+    See :doc:`khyperloglog`.
 
 .. function:: merge(qdigest(T)) -> qdigest(T)
     :noindex:
@@ -496,7 +505,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     .. math ::
 
         {
-            \sum_{i \;|\; x_i \leq t_j \bigwedge y_i = 0} \left[ w_i \right]
+            \sum_{i \;|\; x_i > t_j \bigwedge y_i = 0} \left[ w_i \right]
             \over
             \sum_{i \;|\; y_i = 0} \left[ w_i \right]
         },

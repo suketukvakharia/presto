@@ -30,6 +30,8 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.hive.BucketFunctionType.HIVE_COMPATIBLE;
+import static com.facebook.presto.hive.BucketFunctionType.PRESTO_NATIVE;
 import static com.facebook.presto.hive.HiveCompressionCodec.NONE;
 import static com.facebook.presto.hive.HiveCompressionCodec.SNAPPY;
 import static com.facebook.presto.hive.HiveStorageFormat.DWRF;
@@ -70,9 +72,11 @@ public class TestHiveClientConfig
                 .setResourceConfigFiles("")
                 .setHiveStorageFormat(ORC)
                 .setCompressionCodec(HiveCompressionCodec.GZIP)
+                .setOrcCompressionCodec(HiveCompressionCodec.GZIP)
                 .setRespectTableFormat(true)
                 .setImmutablePartitions(false)
                 .setInsertOverwriteImmutablePartitionEnabled(false)
+                .setFailFastOnInsertIntoImmutablePartitionsEnabled(true)
                 .setSortedWritingEnabled(true)
                 .setMaxPartitionsPerWriter(100)
                 .setMaxOpenSortFiles(50)
@@ -103,6 +107,7 @@ public class TestHiveClientConfig
                 .setSkipTargetCleanupOnRollback(false)
                 .setBucketExecutionEnabled(true)
                 .setIgnoreTableBucketing(false)
+                .setMinBucketCountToNotIgnoreTableBucketing(0)
                 .setMaxBucketsForGroupedExecution(1_000_000)
                 .setSortedWriteToTempPathEnabled(false)
                 .setSortedWriteTempPathSubdirectoryCount(10)
@@ -129,7 +134,11 @@ public class TestHiveClientConfig
                 .setAdaptiveFilterReorderingEnabled(true)
                 .setFileStatusCacheExpireAfterWrite(new Duration(0, TimeUnit.SECONDS))
                 .setFileStatusCacheMaxSize(0)
-                .setFileStatusCacheTables(""));
+                .setFileStatusCacheTables("")
+                .setPageFileStripeMaxSize(new DataSize(24, Unit.MEGABYTE))
+                .setParquetBatchReaderVerificationEnabled(false)
+                .setParquetBatchReadOptimizationEnabled(false)
+                .setBucketFunctionTypeForExchange(HIVE_COMPATIBLE));
     }
 
     @Test
@@ -160,9 +169,11 @@ public class TestHiveClientConfig
                 .put("hive.recursive-directories", "true")
                 .put("hive.storage-format", "SEQUENCEFILE")
                 .put("hive.compression-codec", "NONE")
+                .put("hive.orc-compression-codec", "ZSTD")
                 .put("hive.respect-table-format", "false")
                 .put("hive.immutable-partitions", "true")
                 .put("hive.insert-overwrite-immutable-partitions-enabled", "true")
+                .put("hive.fail-fast-on-insert-into-immutable-partitions-enabled", "false")
                 .put("hive.max-partitions-per-writers", "222")
                 .put("hive.max-open-sort-files", "333")
                 .put("hive.write-validation-threads", "11")
@@ -196,6 +207,7 @@ public class TestHiveClientConfig
                 .put("hive.bucket-execution", "false")
                 .put("hive.sorted-writing", "false")
                 .put("hive.ignore-table-bucketing", "true")
+                .put("hive.min-bucket-count-to-not-ignore-table-bucketing", "1024")
                 .put("hive.max-buckets-for-grouped-execution", "100")
                 .put("hive.sorted-write-to-temp-path-enabled", "true")
                 .put("hive.sorted-write-temp-path-subdirectory-count", "50")
@@ -222,6 +234,10 @@ public class TestHiveClientConfig
                 .put("hive.file-status-cache-tables", "foo.bar1, foo.bar2")
                 .put("hive.file-status-cache-size", "1000")
                 .put("hive.file-status-cache-expire-time", "30m")
+                .put("hive.pagefile.writer.stripe-max-size", "1kB")
+                .put("hive.parquet-batch-read-optimization-enabled", "true")
+                .put("hive.enable-parquet-batch-reader-verification", "true")
+                .put("hive.bucket-function-type-for-exchange", "PRESTO_NATIVE")
                 .build();
 
         HiveClientConfig expected = new HiveClientConfig()
@@ -250,9 +266,11 @@ public class TestHiveClientConfig
                 .setResourceConfigFiles(ImmutableList.of("/foo.xml", "/bar.xml"))
                 .setHiveStorageFormat(HiveStorageFormat.SEQUENCEFILE)
                 .setCompressionCodec(HiveCompressionCodec.NONE)
+                .setOrcCompressionCodec(HiveCompressionCodec.ZSTD)
                 .setRespectTableFormat(false)
                 .setImmutablePartitions(true)
                 .setInsertOverwriteImmutablePartitionEnabled(true)
+                .setFailFastOnInsertIntoImmutablePartitionsEnabled(false)
                 .setMaxPartitionsPerWriter(222)
                 .setMaxOpenSortFiles(333)
                 .setWriteValidationThreads(11)
@@ -296,6 +314,7 @@ public class TestHiveClientConfig
                 .setHdfsWireEncryptionEnabled(true)
                 .setPartitionStatisticsSampleSize(1234)
                 .setIgnoreCorruptedStatistics(true)
+                .setMinBucketCountToNotIgnoreTableBucketing(1024)
                 .setCollectColumnStatisticsOnWrite(true)
                 .setCollectColumnStatisticsOnWrite(true)
                 .setS3SelectPushdownEnabled(true)
@@ -311,7 +330,11 @@ public class TestHiveClientConfig
                 .setAdaptiveFilterReorderingEnabled(false)
                 .setFileStatusCacheTables("foo.bar1,foo.bar2")
                 .setFileStatusCacheMaxSize(1000)
-                .setFileStatusCacheExpireAfterWrite(new Duration(30, TimeUnit.MINUTES));
+                .setFileStatusCacheExpireAfterWrite(new Duration(30, TimeUnit.MINUTES))
+                .setPageFileStripeMaxSize(new DataSize(1, Unit.KILOBYTE))
+                .setParquetBatchReaderVerificationEnabled(true)
+                .setParquetBatchReadOptimizationEnabled(true)
+                .setBucketFunctionTypeForExchange(PRESTO_NATIVE);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

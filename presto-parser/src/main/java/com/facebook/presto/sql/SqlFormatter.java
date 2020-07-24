@@ -47,6 +47,7 @@ import com.facebook.presto.sql.tree.ExplainFormat;
 import com.facebook.presto.sql.tree.ExplainOption;
 import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.ExternalBodyReference;
 import com.facebook.presto.sql.tree.Grant;
 import com.facebook.presto.sql.tree.GrantRoles;
 import com.facebook.presto.sql.tree.GrantorSpecification;
@@ -88,6 +89,7 @@ import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.ShowCatalogs;
 import com.facebook.presto.sql.tree.ShowColumns;
 import com.facebook.presto.sql.tree.ShowCreate;
+import com.facebook.presto.sql.tree.ShowCreateFunction;
 import com.facebook.presto.sql.tree.ShowFunctions;
 import com.facebook.presto.sql.tree.ShowGrants;
 import com.facebook.presto.sql.tree.ShowRoleGrants;
@@ -548,8 +550,14 @@ public final class SqlFormatter
                 builder.append("OR REPLACE ");
             }
             builder.append("VIEW ")
-                    .append(formatName(node.getName()))
-                    .append(" AS\n");
+                    .append(formatName(node.getName()));
+
+            node.getSecurity().ifPresent(security ->
+                    builder.append(" SECURITY ")
+                            .append(security.toString())
+                            .append(" "));
+
+            builder.append(" AS\n");
 
             process(node.getQuery(), indent);
 
@@ -608,6 +616,18 @@ public final class SqlFormatter
         {
             append(indent, "RETURN ");
             builder.append(formatExpression(node.getExpression(), parameters));
+
+            return null;
+        }
+
+        @Override
+        protected Void visitExternalBodyReference(ExternalBodyReference node, Integer indent)
+        {
+            append(indent, "EXTERNAL");
+            if (node.getIdentifier().isPresent()) {
+                builder.append(" NAME ");
+                builder.append(node.getIdentifier().get().toString());
+            }
 
             return null;
         }
@@ -728,6 +748,16 @@ public final class SqlFormatter
         }
 
         @Override
+        protected Void visitShowCreateFunction(ShowCreateFunction node, Integer context)
+        {
+            builder.append("SHOW CREATE FUNCTION ")
+                    .append(formatName(node.getName()));
+            node.getParameterTypes().map(Formatter::formatTypeList).ifPresent(builder::append);
+
+            return null;
+        }
+
+        @Override
         protected Void visitShowColumns(ShowColumns node, Integer context)
         {
             builder.append("SHOW COLUMNS FROM ")
@@ -749,6 +779,14 @@ public final class SqlFormatter
         protected Void visitShowFunctions(ShowFunctions node, Integer context)
         {
             builder.append("SHOW FUNCTIONS");
+
+            node.getLikePattern().ifPresent(value ->
+                    builder.append(" LIKE ")
+                            .append(formatStringLiteral(value)));
+
+            node.getEscape().ifPresent(value ->
+                    builder.append(" ESCAPE ")
+                            .append(formatStringLiteral(value)));
 
             return null;
         }
@@ -930,7 +968,7 @@ public final class SqlFormatter
                     .collect(joining(",\n", "(\n", "\n)"));
         }
 
-        public static String formatTypeList(List<String> types)
+        private static String formatTypeList(List<String> types)
         {
             return format("(%s)", Joiner.on(", ").join(types));
         }
@@ -938,7 +976,7 @@ public final class SqlFormatter
         private String formatRoutineCharacteristics(RoutineCharacteristics characteristics)
         {
             return Joiner.on("\n").join(ImmutableList.of(
-                    "LANGUAGE " + formatRoutineCharacteristicName(characteristics.getLanguage()),
+                    "LANGUAGE " + characteristics.getLanguage(),
                     formatRoutineCharacteristicName(characteristics.getDeterminism()),
                     formatRoutineCharacteristicName(characteristics.getNullCallClause())));
         }

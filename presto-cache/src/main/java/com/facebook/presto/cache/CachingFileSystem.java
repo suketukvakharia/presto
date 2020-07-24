@@ -13,6 +13,9 @@
  */
 package com.facebook.presto.cache;
 
+import com.facebook.presto.hive.HiveFileContext;
+import com.facebook.presto.hive.HiveFileInfo;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.ContentSummary;
@@ -21,9 +24,9 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FsServerDefaults;
 import org.apache.hadoop.fs.FsStatus;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Options;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
@@ -44,31 +47,21 @@ import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
-public final class CachingFileSystem
-        extends FileSystem
+public abstract class CachingFileSystem
+        extends ExtendedFileSystem
 {
-    private final URI uri;
-    private final CacheManager cacheManager;
-    private final FileSystem dataTier;
-    private final boolean cacheValidationEnabled;
+    protected final ExtendedFileSystem dataTier;
+    protected final URI uri;
 
-    public CachingFileSystem(
-            URI uri,
-            Configuration configuration,
-            CacheManager cacheManager,
-            FileSystem dataTier,
-            boolean cacheValidationEnabled)
+    public CachingFileSystem(ExtendedFileSystem dataTier, URI uri)
     {
-        requireNonNull(configuration, "configuration is null");
-        this.uri = requireNonNull(uri, "uri is null");
-        this.cacheManager = requireNonNull(cacheManager, "cacheManager is null");
         this.dataTier = requireNonNull(dataTier, "dataTier is null");
-        this.cacheValidationEnabled = cacheValidationEnabled;
+        this.uri = requireNonNull(uri, "uri is null");
+    }
 
-        setConf(configuration);
-
-        //noinspection AssignmentToSuperclassField
-        statistics = getStatistics(this.uri.getScheme(), getClass());
+    public ExtendedFileSystem getDataTier()
+    {
+        return dataTier;
     }
 
     @Override
@@ -88,6 +81,12 @@ public final class CachingFileSystem
             throws IOException
     {
         dataTier.initialize(uri, configuration);
+    }
+
+    @Override
+    public Configuration getConf()
+    {
+        return dataTier.getConf();
     }
 
     @Override
@@ -144,8 +143,13 @@ public final class CachingFileSystem
     public FSDataInputStream open(Path path, int bufferSize)
             throws IOException
     {
-        return new CachingInputStream(dataTier.open(path, bufferSize), cacheManager, path, cacheValidationEnabled);
+        return dataTier.open(path, bufferSize);
     }
+
+    // HiveFileContext contains caching info, which must be used while overriding this method.
+    @Override
+    public abstract FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext)
+            throws Exception;
 
     @Override
     public FSDataOutputStream append(Path path, int bufferSize, Progressable progressable)
@@ -251,14 +255,6 @@ public final class CachingFileSystem
             throws IOException
     {
         dataTier.close();
-    }
-
-    @Override
-    public String toString()
-    {
-        return "CachingFileSystem[" +
-                "dataTier=" + dataTier +
-                ']';
     }
 
     @Override
@@ -489,13 +485,17 @@ public final class CachingFileSystem
         return dataTier.makeQualified(path);
     }
 
-    public FileSystem getDataTier()
+    @Override
+    public RemoteIterator<LocatedFileStatus> listDirectory(Path path)
+            throws IOException
     {
-        return dataTier;
+        return dataTier.listDirectory(path);
     }
 
-    public boolean isCacheValidationEnabled()
+    @Override
+    public RemoteIterator<HiveFileInfo> listFiles(Path path)
+            throws IOException
     {
-        return cacheValidationEnabled;
+        return dataTier.listFiles(path);
     }
 }

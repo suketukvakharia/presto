@@ -15,18 +15,23 @@ package com.facebook.presto.druid;
 
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.druid.DruidErrorCode.DRUID_QUERY_GENERATOR_FAILURE;
+import static com.facebook.presto.druid.DruidPushdownUtils.DRUID_COUNT_DISTINCT_FUNCTION_NAME;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
@@ -147,11 +152,39 @@ public class DruidQueryGeneratorContext
             int newAggregations,
             Set<VariableReferenceExpression> newHiddenColumnSet)
     {
-        checkState(!hasAggregation(), "Druid doesn't support aggregation on top of the aggregated data");
+        AtomicBoolean pushDownDistinctCount = new AtomicBoolean(false);
+        newSelections.values().forEach(selection -> {
+            if (selection.getDefinition().startsWith(DRUID_COUNT_DISTINCT_FUNCTION_NAME.toUpperCase(Locale.ENGLISH))) {
+                pushDownDistinctCount.set(true);
+            }
+        });
+        Map<VariableReferenceExpression, Selection> targetSelections = newSelections;
+        if (pushDownDistinctCount.get()) {
+            // Push down count distinct query to Druid, clean up hidden column set by the non-aggregation groupBy Plan.
+            newHiddenColumnSet = ImmutableSet.of();
+            ImmutableMap.Builder<VariableReferenceExpression, Selection> builder = ImmutableMap.builder();
+            for (Map.Entry<VariableReferenceExpression, Selection> entry : newSelections.entrySet()) {
+                if (entry.getValue().getDefinition().startsWith(DRUID_COUNT_DISTINCT_FUNCTION_NAME.toUpperCase(Locale.ENGLISH))) {
+                    String definition = entry.getValue().getDefinition();
+                    int start = definition.indexOf("(");
+                    int end = definition.indexOf(")");
+                    String countDistinctClause = "count ( distinct " + escapeSqlIdentifier(definition.substring(start + 1, end)) + ")";
+                    Selection countDistinctSelection = new Selection(countDistinctClause, entry.getValue().getOrigin());
+                    builder.put(entry.getKey(), countDistinctSelection);
+                }
+                else {
+                    builder.put(entry.getKey(), entry.getValue());
+                }
+            }
+            targetSelections = builder.build();
+        }
+        else {
+            checkState(!hasAggregation(), "Druid doesn't support aggregation on top of the aggregated data");
+        }
         checkState(!hasLimit(), "Druid doesn't support aggregation on top of the limit");
         checkState(newAggregations > 0, "Invalid number of aggregations");
         return new DruidQueryGeneratorContext(
-                newSelections,
+                targetSelections,
                 from,
                 filter,
                 limit,
@@ -159,6 +192,11 @@ public class DruidQueryGeneratorContext
                 newGroupByColumns,
                 variablesInAggregation,
                 newHiddenColumnSet);
+    }
+
+    private static String escapeSqlIdentifier(String identifier)
+    {
+        return "\"" + identifier + "\"";
     }
 
     public DruidQueryGeneratorContext withVariablesInAggregation(Set<VariableReferenceExpression> newVariablesInAggregation)
@@ -211,14 +249,14 @@ public class DruidQueryGeneratorContext
         }
 
         String expressions = selections.entrySet().stream()
-                .map(s -> s.getValue().getDefinition())
+                .map(s -> s.getValue().getEscapedDefinition())
                 .collect(Collectors.joining(", "));
         if (expressions.isEmpty()) {
             throw new PrestoException(DRUID_QUERY_GENERATOR_FAILURE, "Empty Druid query");
         }
 
         String tableName = from.orElseThrow(() -> new PrestoException(DRUID_QUERY_GENERATOR_FAILURE, "Table name missing in Druid query"));
-        String query = "SELECT " + expressions + " FROM " + tableName;
+        String query = "SELECT " + expressions + " FROM " + escapeSqlIdentifier(tableName);
         boolean pushdown = false;
         if (filter.isPresent()) {
             // this is hack!!!. Ideally we want to clone the scan pipeline and create/update the filter in the scan pipeline to contain this filter and
@@ -228,12 +266,18 @@ public class DruidQueryGeneratorContext
         }
 
         if (!groupByColumns.isEmpty()) {
-            String groupByExpression = groupByColumns.stream().map(x -> selections.get(x).getDefinition()).collect(Collectors.joining(", "));
+            String groupByExpression = groupByColumns.stream()
+                    .map(expression -> selections.containsKey(expression) ? selections.get(expression).getEscapedDefinition() : expression.getName())
+                    .collect(Collectors.joining(", "));
             query = query + " GROUP BY " + groupByExpression;
             pushdown = true;
         }
 
-        if (!hasAggregation() && limit.isPresent()) {
+        if (hasAggregation()) {
+            pushdown = true;
+        }
+
+        if (limit.isPresent()) {
             query += " LIMIT " + limit.getAsLong();
             pushdown = true;
         }
@@ -246,7 +290,9 @@ public class DruidQueryGeneratorContext
         selections.entrySet().stream().filter(e -> !hiddenColumnSet.contains(e.getKey())).forEach(entry -> {
             VariableReferenceExpression variable = entry.getKey();
             Selection selection = entry.getValue();
-            DruidColumnHandle handle = selection.getOrigin() == Origin.TABLE_COLUMN ? new DruidColumnHandle(selection.getDefinition(), variable.getType(), DruidColumnHandle.DruidColumnType.REGULAR) : new DruidColumnHandle(variable, DruidColumnHandle.DruidColumnType.DERIVED);
+            DruidColumnHandle handle = selection.getOrigin() == Origin.TABLE_COLUMN ?
+                    new DruidColumnHandle(selection.getDefinition(), variable.getType(), DruidColumnHandle.DruidColumnType.REGULAR) :
+                    new DruidColumnHandle(variable, DruidColumnHandle.DruidColumnType.DERIVED);
             result.put(variable, handle);
         });
         return result;
@@ -290,6 +336,14 @@ public class DruidQueryGeneratorContext
 
         public String getDefinition()
         {
+            return definition;
+        }
+
+        public String getEscapedDefinition()
+        {
+            if (origin == Origin.TABLE_COLUMN) {
+                return escapeSqlIdentifier(definition);
+            }
             return definition;
         }
 

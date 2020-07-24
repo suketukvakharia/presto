@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.hive.BucketFunctionType.HIVE_COMPATIBLE;
 import static com.facebook.presto.hive.HiveStorageFormat.ORC;
 import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.NO_PREFERENCE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -85,9 +86,11 @@ public class HiveClientConfig
 
     private HiveStorageFormat hiveStorageFormat = ORC;
     private HiveCompressionCodec compressionCodec = HiveCompressionCodec.GZIP;
+    private HiveCompressionCodec orcCompressionCodec = HiveCompressionCodec.GZIP;
     private boolean respectTableFormat = true;
     private boolean immutablePartitions;
     private boolean insertOverwriteImmutablePartitions;
+    private boolean failFastOnInsertIntoImmutablePartitionsEnabled = true;
     private int maxPartitionsPerWriter = 100;
     private int maxOpenSortFiles = 50;
     private int writeValidationThreads = 16;
@@ -128,7 +131,9 @@ public class HiveClientConfig
 
     private boolean bucketExecutionEnabled = true;
     private boolean sortedWritingEnabled = true;
+    private BucketFunctionType bucketFunctionTypeForExchange = HIVE_COMPATIBLE;
     private boolean ignoreTableBucketing;
+    private int minBucketCountToNotIgnoreTableBucketing;
     private int maxBucketsForGroupedExecution = 1_000_000;
     // TODO: Clean up this gatekeeper config and related code/session property once the roll out is done.
     private boolean sortedWriteToTempPathEnabled;
@@ -163,6 +168,10 @@ public class HiveClientConfig
     private Duration fileStatusCacheExpireAfterWrite = new Duration(0, TimeUnit.SECONDS);
     private long fileStatusCacheMaxSize;
     private List<String> fileStatusCacheTables = ImmutableList.of();
+
+    private DataSize pageFileStripeMaxSize = new DataSize(24, MEGABYTE);
+    private boolean parquetBatchReadOptimizationEnabled;
+    private boolean parquetEnableBatchReaderVerification;
 
     public int getMaxInitialSplits()
     {
@@ -507,6 +516,18 @@ public class HiveClientConfig
         return this;
     }
 
+    public HiveCompressionCodec getOrcCompressionCodec()
+    {
+        return orcCompressionCodec;
+    }
+
+    @Config("hive.orc-compression-codec")
+    public HiveClientConfig setOrcCompressionCodec(HiveCompressionCodec orcCompressionCodec)
+    {
+        this.orcCompressionCodec = orcCompressionCodec;
+        return this;
+    }
+
     public boolean isRespectTableFormat()
     {
         return respectTableFormat;
@@ -543,6 +564,19 @@ public class HiveClientConfig
     public HiveClientConfig setImmutablePartitions(boolean immutablePartitions)
     {
         this.immutablePartitions = immutablePartitions;
+        return this;
+    }
+
+    public boolean isFailFastOnInsertIntoImmutablePartitionsEnabled()
+    {
+        return failFastOnInsertIntoImmutablePartitionsEnabled;
+    }
+
+    @Config("hive.fail-fast-on-insert-into-immutable-partitions-enabled")
+    @ConfigDescription("Fail fast when inserting into an immutable partition. Increases load on the metastore")
+    public HiveClientConfig setFailFastOnInsertIntoImmutablePartitionsEnabled(boolean failFastOnInsertIntoImmutablePartitionsEnabled)
+    {
+        this.failFastOnInsertIntoImmutablePartitionsEnabled = failFastOnInsertIntoImmutablePartitionsEnabled;
         return this;
     }
 
@@ -902,6 +936,7 @@ public class HiveClientConfig
     }
 
     @Config("hive.file-status-cache-tables")
+    @ConfigDescription("The tables that have file status cache enabled. Setting to '*' includes all tables.")
     public HiveClientConfig setFileStatusCacheTables(String fileStatusCacheTables)
     {
         this.fileStatusCacheTables = SPLITTER.splitToList(fileStatusCacheTables);
@@ -1050,6 +1085,19 @@ public class HiveClientConfig
         return this;
     }
 
+    @Config("hive.bucket-function-type-for-exchange")
+    @ConfigDescription("Hash function type for exchange")
+    public HiveClientConfig setBucketFunctionTypeForExchange(BucketFunctionType bucketFunctionTypeForExchange)
+    {
+        this.bucketFunctionTypeForExchange = bucketFunctionTypeForExchange;
+        return this;
+    }
+
+    public BucketFunctionType getBucketFunctionTypeForExchange()
+    {
+        return bucketFunctionTypeForExchange;
+    }
+
     @Config("hive.ignore-table-bucketing")
     @ConfigDescription("Ignore table bucketing to allow reading from unbucketed partitions")
     public HiveClientConfig setIgnoreTableBucketing(boolean ignoreTableBucketing)
@@ -1061,6 +1109,20 @@ public class HiveClientConfig
     public boolean isIgnoreTableBucketing()
     {
         return ignoreTableBucketing;
+    }
+
+    @Config("hive.min-bucket-count-to-not-ignore-table-bucketing")
+    @ConfigDescription("Ignore table bucketing when table bucket count is less than the value specified, " +
+            "otherwise, it is controlled by property hive.ignore-table-bucketing")
+    public HiveClientConfig setMinBucketCountToNotIgnoreTableBucketing(int minBucketCountToNotIgnoreTableBucketing)
+    {
+        this.minBucketCountToNotIgnoreTableBucketing = minBucketCountToNotIgnoreTableBucketing;
+        return this;
+    }
+
+    public int getMinBucketCountToNotIgnoreTableBucketing()
+    {
+        return minBucketCountToNotIgnoreTableBucketing;
     }
 
     @Config("hive.max-buckets-for-grouped-execution")
@@ -1323,5 +1385,43 @@ public class HiveClientConfig
     {
         this.adaptiveFilterReorderingEnabled = adaptiveFilterReorderingEnabled;
         return this;
+    }
+
+    public DataSize getPageFileStripeMaxSize()
+    {
+        return pageFileStripeMaxSize;
+    }
+
+    @Config("hive.pagefile.writer.stripe-max-size")
+    public HiveClientConfig setPageFileStripeMaxSize(DataSize pageFileStripeMaxSize)
+    {
+        this.pageFileStripeMaxSize = pageFileStripeMaxSize;
+        return this;
+    }
+
+    @Config("hive.parquet-batch-read-optimization-enabled")
+    @ConfigDescription("enable parquet batch reads optimization")
+    public HiveClientConfig setParquetBatchReadOptimizationEnabled(boolean parquetBatchReadOptimizationEnabled)
+    {
+        this.parquetBatchReadOptimizationEnabled = parquetBatchReadOptimizationEnabled;
+        return this;
+    }
+
+    public boolean isParquetBatchReadOptimizationEnabled()
+    {
+        return this.parquetBatchReadOptimizationEnabled;
+    }
+
+    @Config("hive.enable-parquet-batch-reader-verification")
+    @ConfigDescription("enable optimized parquet reader")
+    public HiveClientConfig setParquetBatchReaderVerificationEnabled(boolean parquetEnableBatchReaderVerification)
+    {
+        this.parquetEnableBatchReaderVerification = parquetEnableBatchReaderVerification;
+        return this;
+    }
+
+    public boolean isParquetBatchReaderVerificationEnabled()
+    {
+        return this.parquetEnableBatchReaderVerification;
     }
 }

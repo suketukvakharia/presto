@@ -27,14 +27,12 @@
  */
 package com.facebook.presto.operator.repartition;
 
-import com.facebook.presto.spi.block.ArrayAllocator;
-import com.facebook.presto.spi.block.ColumnarMap;
-import com.facebook.presto.spi.type.TypeSerde;
+import com.facebook.presto.common.block.ArrayAllocator;
+import com.facebook.presto.common.block.ColumnarMap;
+import com.facebook.presto.common.type.TypeSerde;
 import com.google.common.annotations.VisibleForTesting;
 import io.airlift.slice.SliceOutput;
 import org.openjdk.jol.info.ClassLayout;
-
-import java.util.Optional;
 
 import static com.facebook.presto.array.Arrays.ExpansionFactor.LARGE;
 import static com.facebook.presto.array.Arrays.ExpansionFactor.SMALL;
@@ -43,6 +41,7 @@ import static com.facebook.presto.array.Arrays.ExpansionOption.PRESERVE;
 import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.operator.MoreByteArrays.setInts;
 import static com.facebook.presto.operator.UncheckedByteArrays.setIntUnchecked;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static java.util.Objects.requireNonNull;
@@ -54,16 +53,21 @@ public class MapBlockEncodingBuffer
     @VisibleForTesting
     static final int POSITION_SIZE = SIZE_OF_INT + SIZE_OF_BYTE;
 
+    @VisibleForTesting
+    static final int HASH_MULTIPLIER = 2;
+
+    private static final int POSITION_SIZE_WITH_HASHTABLE = SIZE_OF_INT + SIZE_OF_BYTE + SIZE_OF_INT * HASH_MULTIPLIER;
     private static final String NAME = "MAP";
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(MapBlockEncodingBuffer.class).instanceSize();
-
-    private static final int HASH_MULTIPLIER = 2;
 
     // The buffer for the hashtables for all incoming blocks so far
     private byte[] hashTablesBuffer;
 
     // The address that the next hashtable entry will be written to.
     private int hashTableBufferIndex;
+
+    // The estimated maximum size for hashTablesBuffer
+    private int estimatedHashTableBufferMaxCapacity;
 
     // If any of the incoming blocks do not contain the hashtable, noHashTables is set to true.
     private boolean noHashTables;
@@ -73,6 +77,9 @@ public class MapBlockEncodingBuffer
 
     // The address that the next offset value will be written to.
     private int offsetsBufferIndex;
+
+    // The estimated maximum size for offsetsBuffer
+    private int estimatedOffsetBufferMaxCapacity;
 
     // This array holds the condensed offsets for each position for the incoming block.
     private int[] offsets;
@@ -84,14 +91,14 @@ public class MapBlockEncodingBuffer
     private ColumnarMap columnarMap;
 
     // The AbstractBlockEncodingBuffer for the nested key and value Block of the MapBlock
-    private final BlockEncodingBuffer keyBuffers;
-    private final BlockEncodingBuffer valueBuffers;
+    private final AbstractBlockEncodingBuffer keyBuffers;
+    private final AbstractBlockEncodingBuffer valueBuffers;
 
     public MapBlockEncodingBuffer(DecodedBlockNode decodedBlockNode, ArrayAllocator bufferAllocator, boolean isNested)
     {
         super(bufferAllocator, isNested);
-        keyBuffers = createBlockEncodingBuffers(decodedBlockNode.getChildren().get(0), bufferAllocator, true);
-        valueBuffers = createBlockEncodingBuffers(decodedBlockNode.getChildren().get(1), bufferAllocator, true);
+        keyBuffers = (AbstractBlockEncodingBuffer) createBlockEncodingBuffers(decodedBlockNode.getChildren().get(0), bufferAllocator, true);
+        valueBuffers = (AbstractBlockEncodingBuffer) createBlockEncodingBuffers(decodedBlockNode.getChildren().get(1), bufferAllocator, true);
     }
 
     @Override
@@ -101,13 +108,13 @@ public class MapBlockEncodingBuffer
             serializedRowSizes[i] += POSITION_SIZE;
         }
 
-        int[] offsetsCopy = ensureCapacity((int[]) null, positionCount + 1, SMALL, NONE, bufferAllocator);
+        int[] offsetsCopy = ensureCapacity(null, positionCount + 1, SMALL, NONE, bufferAllocator);
         try {
             System.arraycopy(offsets, 0, offsetsCopy, 0, positionCount + 1);
-            ((AbstractBlockEncodingBuffer) keyBuffers).accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
+            keyBuffers.accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
 
             System.arraycopy(offsets, 0, offsetsCopy, 0, positionCount + 1);
-            ((AbstractBlockEncodingBuffer) valueBuffers).accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
+            valueBuffers.accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
         }
         finally {
             bufferAllocator.returnArray(offsetsCopy);
@@ -247,20 +254,53 @@ public class MapBlockEncodingBuffer
     @Override
     public String toString()
     {
-        StringBuilder sb = new StringBuilder(getClass().getSimpleName()).append("{");
-        sb.append("hashTablesBufferCapacity=").append(hashTablesBuffer == null ? 0 : hashTablesBuffer.length).append(",");
-        sb.append("hashTableBufferIndex=").append(hashTableBufferIndex).append(",");
-        sb.append("offsetsBufferCapacity=").append(offsetsBuffer == null ? 0 : offsetsBuffer.length).append(",");
-        sb.append("offsetsBufferIndex=").append(offsetsBufferIndex).append(",");
-        sb.append("offsetsCapacity=").append(offsets == null ? 0 : offsets.length).append(",");
-        sb.append("lastOffset=").append(lastOffset).append(",");
-        sb.append("keyBuffers=").append(keyBuffers.toString()).append(",");
-        sb.append("valueBuffers=").append(valueBuffers.toString()).append("}");
-        return sb.toString();
+        return toStringHelper(this)
+                .add("super", super.toString())
+                .add("estimatedHashTableBufferMaxCapacity", estimatedHashTableBufferMaxCapacity)
+                .add("hashTablesBufferCapacity", hashTablesBuffer == null ? 0 : hashTablesBuffer.length)
+                .add("hashTableBufferIndex", hashTableBufferIndex)
+                .add("estimatedOffsetBufferMaxCapacity", estimatedOffsetBufferMaxCapacity)
+                .add("offsetsBufferCapacity", offsetsBuffer == null ? 0 : offsetsBuffer.length)
+                .add("offsetsBufferIndex", offsetsBufferIndex)
+                .add("offsetsCapacity", offsets == null ? 0 : offsets.length)
+                .add("lastOffset", lastOffset)
+                .add("keyBuffers", keyBuffers)
+                .add("valueBuffers", valueBuffers)
+                .toString();
     }
 
     @Override
-    protected void setupDecodedBlockAndMapPositions(DecodedBlockNode decodedBlockNode)
+    protected int getEstimatedValueBufferMaxCapacity()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @VisibleForTesting
+    int getEstimatedOffsetBufferMaxCapacity()
+    {
+        return estimatedOffsetBufferMaxCapacity;
+    }
+
+    @VisibleForTesting
+    int getEstimatedHashTableBufferMaxCapacity()
+    {
+        return estimatedHashTableBufferMaxCapacity;
+    }
+
+    @VisibleForTesting
+    BlockEncodingBuffer getKeyBuffers()
+    {
+        return keyBuffers;
+    }
+
+    @VisibleForTesting
+    BlockEncodingBuffer getValueBuffers()
+    {
+        return valueBuffers;
+    }
+
+    @Override
+    protected void setupDecodedBlockAndMapPositions(DecodedBlockNode decodedBlockNode, int partitionBufferCapacity, double decodedBlockPageSizeFraction)
     {
         requireNonNull(decodedBlockNode, "decodedBlockNode is null");
 
@@ -268,10 +308,22 @@ public class MapBlockEncodingBuffer
         columnarMap = (ColumnarMap) decodedBlockNode.getDecodedBlock();
         decodedBlock = columnarMap.getNullCheckBlock();
 
+        long estimatedSerializedSizeInBytes = decodedBlockNode.getEstimatedSerializedSizeInBytes();
+        long keyBufferEstimatedSerializedSizeInBytes = decodedBlockNode.getChildren().get(0).getEstimatedSerializedSizeInBytes();
+        long valueBufferEstimatedSerializedSizeInBytes = decodedBlockNode.getChildren().get(1).getEstimatedSerializedSizeInBytes();
+
+        double targetBufferSize = partitionBufferCapacity * decodedBlockPageSizeFraction *
+                (estimatedSerializedSizeInBytes - keyBufferEstimatedSerializedSizeInBytes - valueBufferEstimatedSerializedSizeInBytes) / estimatedSerializedSizeInBytes;
+
+        estimatedHashTableBufferMaxCapacity = getEstimatedBufferMaxCapacity(targetBufferSize, Integer.BYTES * HASH_MULTIPLIER, POSITION_SIZE_WITH_HASHTABLE);
+        setEstimatedNullsBufferMaxCapacity(getEstimatedBufferMaxCapacity(targetBufferSize, Byte.BYTES, POSITION_SIZE_WITH_HASHTABLE));
+        estimatedOffsetBufferMaxCapacity = getEstimatedBufferMaxCapacity(targetBufferSize, Integer.BYTES, POSITION_SIZE_WITH_HASHTABLE);
+
         populateNestedPositions();
 
-        ((AbstractBlockEncodingBuffer) keyBuffers).setupDecodedBlockAndMapPositions(decodedBlockNode.getChildren().get(0));
-        ((AbstractBlockEncodingBuffer) valueBuffers).setupDecodedBlockAndMapPositions(decodedBlockNode.getChildren().get(1));
+        keyBuffers.setupDecodedBlockAndMapPositions(decodedBlockNode.getChildren().get(0), partitionBufferCapacity, decodedBlockPageSizeFraction * keyBufferEstimatedSerializedSizeInBytes / estimatedSerializedSizeInBytes);
+
+        valueBuffers.setupDecodedBlockAndMapPositions(decodedBlockNode.getChildren().get(1), partitionBufferCapacity, decodedBlockPageSizeFraction * valueBufferEstimatedSerializedSizeInBytes / estimatedSerializedSizeInBytes);
     }
 
     @Override
@@ -292,12 +344,12 @@ public class MapBlockEncodingBuffer
         }
 
         // positionOffsets might be modified by the next level. Save it for the valueBuffers first.
-        int[] offsetsCopy = ensureCapacity((int[]) null, positionCount + 1, SMALL, NONE, bufferAllocator);
+        int[] offsetsCopy = ensureCapacity(null, positionCount + 1, SMALL, NONE, bufferAllocator);
         try {
             System.arraycopy(positionOffsets, 0, offsetsCopy, 0, positionCount + 1);
 
-            ((AbstractBlockEncodingBuffer) keyBuffers).accumulateSerializedRowSizes(positionOffsets, positionCount, serializedRowSizes);
-            ((AbstractBlockEncodingBuffer) valueBuffers).accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
+            keyBuffers.accumulateSerializedRowSizes(positionOffsets, positionCount, serializedRowSizes);
+            valueBuffers.accumulateSerializedRowSizes(offsetsCopy, positionCount, serializedRowSizes);
         }
         finally {
             bufferAllocator.returnArray(offsetsCopy);
@@ -307,8 +359,8 @@ public class MapBlockEncodingBuffer
     private void populateNestedPositions()
     {
         // Reset nested level positions before checking positionCount. Failing to do so may result in elementsBuffers having stale values when positionCount is 0.
-        ((AbstractBlockEncodingBuffer) keyBuffers).resetPositions();
-        ((AbstractBlockEncodingBuffer) valueBuffers).resetPositions();
+        keyBuffers.resetPositions();
+        valueBuffers.resetPositions();
 
         if (positionCount == 0) {
             return;
@@ -321,22 +373,23 @@ public class MapBlockEncodingBuffer
 
         for (int i = 0; i < positionCount; i++) {
             int position = positions[i];
-            int beginOffset = columnarMap.getOffset(position);
-            int endOffset = columnarMap.getOffset(position + 1);
-            int currentRowSize = endOffset - beginOffset;
+            offsets[i + 1] = offsets[i] + columnarMap.getOffset(position + 1) - columnarMap.getOffset(position);
+        }
 
-            offsets[i + 1] = offsets[i] + currentRowSize;
+        keyBuffers.ensurePositionsCapacity(offsets[positionCount]);
+        valueBuffers.ensurePositionsCapacity(offsets[positionCount]);
 
-            if (currentRowSize > 0) {
-                ((AbstractBlockEncodingBuffer) keyBuffers).appendPositionRange(beginOffset, currentRowSize);
-                ((AbstractBlockEncodingBuffer) valueBuffers).appendPositionRange(beginOffset, currentRowSize);
-            }
+        for (int i = 0; i < positionCount; i++) {
+            int beginOffset = columnarMap.getOffset(positions[i]);
+            int currentRowSize = offsets[i + 1] - offsets[i];
+            keyBuffers.appendPositionRange(beginOffset, currentRowSize);
+            valueBuffers.appendPositionRange(beginOffset, currentRowSize);
         }
     }
 
     private void appendOffsets()
     {
-        offsetsBuffer = ensureCapacity(offsetsBuffer, offsetsBufferIndex + batchSize * ARRAY_INT_INDEX_SCALE, LARGE, PRESERVE, bufferAllocator);
+        offsetsBuffer = ensureCapacity(offsetsBuffer, offsetsBufferIndex + batchSize * ARRAY_INT_INDEX_SCALE, estimatedOffsetBufferMaxCapacity, LARGE, PRESERVE, bufferAllocator);
 
         int baseOffset = lastOffset - offsets[positionsOffset];
         for (int i = positionsOffset; i < positionsOffset + batchSize; i++) {
@@ -353,15 +406,15 @@ public class MapBlockEncodingBuffer
             return;
         }
 
-        Optional<int[]> hashTables = columnarMap.getHashTables();
-        if (!hashTables.isPresent()) {
+        int[] hashTables = columnarMap.getHashTables();
+        if (hashTables == null) {
             noHashTables = true;
             hashTableBufferIndex = 0;
             return;
         }
 
         int hashTablesSize = (offsets[positionsOffset + batchSize] - offsets[positionsOffset]) * HASH_MULTIPLIER;
-        hashTablesBuffer = ensureCapacity(hashTablesBuffer, hashTableBufferIndex + hashTablesSize * ARRAY_INT_INDEX_SCALE, LARGE, PRESERVE, bufferAllocator);
+        hashTablesBuffer = ensureCapacity(hashTablesBuffer, hashTableBufferIndex + hashTablesSize * ARRAY_INT_INDEX_SCALE, estimatedHashTableBufferMaxCapacity, LARGE, PRESERVE, bufferAllocator);
 
         int[] positions = getPositions();
 
@@ -374,7 +427,7 @@ public class MapBlockEncodingBuffer
             hashTableBufferIndex = setInts(
                     hashTablesBuffer,
                     hashTableBufferIndex,
-                    hashTables.get(),
+                    hashTables,
                     beginOffset * HASH_MULTIPLIER,
                     (endOffset - beginOffset) * HASH_MULTIPLIER);
         }

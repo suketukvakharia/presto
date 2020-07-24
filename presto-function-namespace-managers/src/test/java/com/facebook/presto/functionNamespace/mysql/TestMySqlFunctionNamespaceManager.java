@@ -15,20 +15,20 @@ package com.facebook.presto.functionNamespace.mysql;
 
 import com.facebook.airlift.bootstrap.Bootstrap;
 import com.facebook.airlift.bootstrap.LifeCycleManager;
-import com.facebook.presto.spi.CatalogSchemaName;
+import com.facebook.presto.common.CatalogSchemaName;
+import com.facebook.presto.common.function.QualifiedFunctionName;
+import com.facebook.presto.common.type.TypeSignature;
 import com.facebook.presto.spi.ErrorCodeSupplier;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.function.AlterRoutineCharacteristics;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.function.FunctionNamespaceTransactionHandle;
-import com.facebook.presto.spi.function.QualifiedFunctionName;
+import com.facebook.presto.spi.function.Parameter;
 import com.facebook.presto.spi.function.RoutineCharacteristics;
 import com.facebook.presto.spi.function.SqlFunctionHandle;
 import com.facebook.presto.spi.function.SqlFunctionId;
 import com.facebook.presto.spi.function.SqlInvokedFunction;
-import com.facebook.presto.spi.function.SqlParameter;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.testing.mysql.TestingMySqlServer;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -38,20 +38,20 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.google.inject.Injector;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.sqlobject.SqlObjectPlugin;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.sql.DriverManager;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static com.facebook.airlift.testing.Closeables.closeQuietly;
+import static com.facebook.presto.common.type.StandardTypes.DOUBLE;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.functionNamespace.testing.SqlInvokedFunctionTestUtils.FUNCTION_POWER_TOWER_DOUBLE;
 import static com.facebook.presto.functionNamespace.testing.SqlInvokedFunctionTestUtils.FUNCTION_POWER_TOWER_DOUBLE_UPDATED;
 import static com.facebook.presto.functionNamespace.testing.SqlInvokedFunctionTestUtils.FUNCTION_POWER_TOWER_INT;
@@ -65,8 +65,6 @@ import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.function.RoutineCharacteristics.Determinism.DETERMINISTIC;
 import static com.facebook.presto.spi.function.RoutineCharacteristics.NullCallClause.CALLED_ON_NULL_INPUT;
 import static com.facebook.presto.spi.function.RoutineCharacteristics.NullCallClause.RETURNS_NULL_ON_NULL_INPUT;
-import static com.facebook.presto.spi.type.StandardTypes.DOUBLE;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
@@ -96,15 +94,14 @@ public class TestMySqlFunctionNamespaceManager
             throws Exception
     {
         this.mySqlServer = new TestingMySqlServer("testuser", "testpass", DB);
-        this.jdbi = Jdbi.create(() -> DriverManager.getConnection(mySqlServer.getJdbcUrl(DB))).installPlugin(new SqlObjectPlugin());
-
         Bootstrap app = new Bootstrap(
                 new MySqlFunctionNamespaceManagerModule(TEST_CATALOG),
-                binder -> binder.bind(Jdbi.class).toInstance(getJdbi()));
+                new MySqlConnectionModule());
 
         Map<String, String> config = ImmutableMap.<String, String>builder()
                 .put("function-cache-expiration", "0s")
                 .put("function-instance-cache-expiration", "0s")
+                .put("database-url", mySqlServer.getJdbcUrl(DB))
                 .build();
 
         try {
@@ -113,6 +110,7 @@ public class TestMySqlFunctionNamespaceManager
                     .setRequiredConfigurationProperties(config)
                     .initialize();
             this.functionNamespaceManager = injector.getInstance(MySqlFunctionNamespaceManager.class);
+            this.jdbi = injector.getInstance(Jdbi.class);
         }
         catch (Exception e) {
             throwIfUnchecked(e);
@@ -155,18 +153,6 @@ public class TestMySqlFunctionNamespaceManager
         createFunction(function1, false);
         createFunction(function2, false);
         assertListFunctions(function1.withVersion(1), function2.withVersion(1));
-    }
-
-    private static SqlInvokedFunction constructTestFunction(QualifiedFunctionName functionName)
-    {
-        return new SqlInvokedFunction(
-                functionName,
-                ImmutableList.of(new SqlParameter("x", parseTypeSignature(DOUBLE))),
-                parseTypeSignature(DOUBLE),
-                "power tower",
-                RoutineCharacteristics.builder().setDeterminism(DETERMINISTIC).build(),
-                "pow(x, x)",
-                Optional.empty());
     }
 
     @Test
@@ -215,49 +201,69 @@ public class TestMySqlFunctionNamespaceManager
     }
 
     @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Schema name exceeds max length of 128.*")
-    public void testCreateFunctionSchemaNameTooLong()
+    public void testSchemaNameTooLong()
     {
         QualifiedFunctionName functionName = QualifiedFunctionName.of(new CatalogSchemaName(TEST_CATALOG, dummyString(129)), "tangent");
-        createFunction(getFunctionTangent(functionName), false);
+        createFunction(createFunctionTangent(functionName), false);
     }
 
     @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Function name exceeds max length of 256.*")
-    public void testCreateFunctionFunctionNameTooLong()
+    public void testFunctionNameTooLong()
     {
         QualifiedFunctionName functionName = QualifiedFunctionName.of(new CatalogSchemaName(TEST_CATALOG, TEST_SCHEMA), dummyString(257));
-        createFunction(getFunctionTangent(functionName), false);
+        createFunction(createFunctionTangent(functionName), false);
     }
 
-    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Parameter types exceeds max length of 500.*")
-    public void testCreateFunctionFunctionIdTooLong()
+    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Function has more than 100 parameters: 101")
+    public void testTooManyParameters()
     {
-        List<SqlParameter> parameters = nCopies(72, new SqlParameter("x", parseTypeSignature(DOUBLE)));
-        createFunction(
-                new SqlInvokedFunction(
-                        FUNCTION_TANGENT.getFunctionId().getFunctionName(),
-                        parameters,
-                        FUNCTION_TANGENT.getSignature().getReturnType(),
-                        FUNCTION_TANGENT.getDescription(),
-                        FUNCTION_TANGENT.getRoutineCharacteristics(),
-                        FUNCTION_TANGENT.getBody(),
-                        Optional.empty()),
-                false);
+        List<Parameter> parameters = nCopies(101, new Parameter("x", parseTypeSignature(DOUBLE)));
+        createFunction(createFunctionTangent(parameters), false);
     }
 
-    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Return type exceeds max length of 256.*")
-    public void testCreateFunctionTypeNameTooLong()
+    public void testLargeParameterCount()
     {
-        TypeSignature returnType = parseTypeSignature(dummyString(257));
-        createFunction(
-                new SqlInvokedFunction(
-                        TANGENT,
-                        FUNCTION_TANGENT.getParameters(),
-                        returnType,
-                        FUNCTION_TANGENT.getDescription(),
-                        FUNCTION_TANGENT.getRoutineCharacteristics(),
-                        FUNCTION_TANGENT.getBody(),
-                        Optional.empty()),
-                false);
+        List<Parameter> parameters = nCopies(100, new Parameter("x", parseTypeSignature(DOUBLE)));
+        createFunction(createFunctionTangent(parameters), false);
+    }
+
+    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Parameter name exceeds max length of 100.*")
+    public void testParameterNameTooLong()
+    {
+        List<Parameter> parameters = ImmutableList.of(new Parameter(dummyString(101), parseTypeSignature(DOUBLE)));
+        createFunction(createFunctionTangent(parameters), false);
+    }
+
+    public void testLongParameterName()
+    {
+        List<Parameter> parameters = ImmutableList.of(new Parameter(dummyString(100), parseTypeSignature(DOUBLE)));
+        createFunction(createFunctionTangent(parameters), false);
+    }
+
+    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Parameter type list exceeds max length of 30000.*")
+    public void testParameterTypeListTooLong()
+    {
+        List<Parameter> parameters = ImmutableList.of(new Parameter("x", createLargeRowType(4286)));
+        createFunction(createFunctionTangent(parameters), false);
+    }
+
+    public void testLongParameterTypeList()
+    {
+        List<Parameter> parameters = ImmutableList.of(new Parameter("x", createLargeRowType(4285)));
+        createFunction(createFunctionTangent(parameters), false);
+    }
+
+    @Test(expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Return type exceeds max length of 30000.*")
+    public void testReturnTypeTooLong()
+    {
+        TypeSignature returnType = parseTypeSignature(dummyString(30001));
+        createFunction(createFunctionTangent(returnType), false);
+    }
+
+    public void testLongReturnType()
+    {
+        TypeSignature returnType = parseTypeSignature(dummyString(30000));
+        createFunction(createFunctionTangent(returnType), false);
     }
 
     @Test
@@ -274,7 +280,7 @@ public class TestMySqlFunctionNamespaceManager
                 FUNCTION_POWER_TOWER_INT.withVersion(1L),
                 new SqlInvokedFunction(
                         POWER_TOWER,
-                        ImmutableList.of(new SqlParameter("x", parseTypeSignature(DOUBLE))),
+                        ImmutableList.of(new Parameter("x", parseTypeSignature(DOUBLE))),
                         parseTypeSignature(DOUBLE),
                         "power tower",
                         RoutineCharacteristics.builder().setDeterminism(DETERMINISTIC).setNullCallClause(RETURNS_NULL_ON_NULL_INPUT).build(),
@@ -474,7 +480,19 @@ public class TestMySqlFunctionNamespaceManager
         return Joiner.on("").join(nCopies(length, "x"));
     }
 
-    private static SqlInvokedFunction getFunctionTangent(QualifiedFunctionName functionName)
+    private static SqlInvokedFunction constructTestFunction(QualifiedFunctionName functionName)
+    {
+        return new SqlInvokedFunction(
+                functionName,
+                ImmutableList.of(new Parameter("x", parseTypeSignature(DOUBLE))),
+                parseTypeSignature(DOUBLE),
+                "power tower",
+                RoutineCharacteristics.builder().setDeterminism(DETERMINISTIC).build(),
+                "pow(x, x)",
+                Optional.empty());
+    }
+
+    private static SqlInvokedFunction createFunctionTangent(QualifiedFunctionName functionName)
     {
         return new SqlInvokedFunction(
                 functionName,
@@ -484,5 +502,35 @@ public class TestMySqlFunctionNamespaceManager
                 FUNCTION_TANGENT.getRoutineCharacteristics(),
                 FUNCTION_TANGENT.getBody(),
                 Optional.empty());
+    }
+
+    private static SqlInvokedFunction createFunctionTangent(List<Parameter> parameters)
+    {
+        return new SqlInvokedFunction(
+                FUNCTION_TANGENT.getFunctionId().getFunctionName(),
+                parameters,
+                FUNCTION_TANGENT.getSignature().getReturnType(),
+                FUNCTION_TANGENT.getDescription(),
+                FUNCTION_TANGENT.getRoutineCharacteristics(),
+                FUNCTION_TANGENT.getBody(),
+                Optional.empty());
+    }
+
+    private static SqlInvokedFunction createFunctionTangent(TypeSignature returnType)
+    {
+        return new SqlInvokedFunction(
+                TANGENT,
+                FUNCTION_TANGENT.getParameters(),
+                returnType,
+                FUNCTION_TANGENT.getDescription(),
+                FUNCTION_TANGENT.getRoutineCharacteristics(),
+                FUNCTION_TANGENT.getBody(),
+                Optional.empty());
+    }
+
+    private static TypeSignature createLargeRowType(int fieldCount)
+    {
+        String format = format("ROW(%s)", Joiner.on(",").join(nCopies(fieldCount, DOUBLE)));
+        return parseTypeSignature(format);
     }
 }

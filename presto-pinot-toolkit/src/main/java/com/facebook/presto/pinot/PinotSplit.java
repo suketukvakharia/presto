@@ -34,9 +34,10 @@ public class PinotSplit
 {
     private final String connectorId;
     private final SplitType splitType;
+    private final List<PinotColumnHandle> expectedColumnHandles;
 
     // Properties needed for broker split type
-    private final Optional<PinotQueryGenerator.GeneratedPql> brokerPql;
+    private final Optional<PinotQueryGenerator.GeneratedPinotQuery> brokerPinotQuery;
 
     // Properties needed for segment split type
     private final Optional<String> segmentPql;
@@ -47,14 +48,16 @@ public class PinotSplit
     public PinotSplit(
             @JsonProperty("connectorId") String connectorId,
             @JsonProperty("splitType") SplitType splitType,
-            @JsonProperty("brokerPql") Optional<PinotQueryGenerator.GeneratedPql> brokerPql,
+            @JsonProperty("expectedColumnHandles") List<PinotColumnHandle> expectedColumnHandles,
+            @JsonProperty("brokerQuery") Optional<PinotQueryGenerator.GeneratedPinotQuery> brokerPinotQuery,
             @JsonProperty("segmentPql") Optional<String> segmentPql,
             @JsonProperty("segments") List<String> segments,
             @JsonProperty("segmentHost") Optional<String> segmentHost)
     {
         this.connectorId = requireNonNull(connectorId, "connector id is null");
         this.splitType = requireNonNull(splitType, "splitType id is null");
-        this.brokerPql = requireNonNull(brokerPql, "brokerPql is null");
+        this.expectedColumnHandles = requireNonNull(expectedColumnHandles, "expected column handles is null");
+        this.brokerPinotQuery = requireNonNull(brokerPinotQuery, "brokerPinotQuery is null");
         this.segmentPql = requireNonNull(segmentPql, "table name is null");
         this.segments = ImmutableList.copyOf(requireNonNull(segments, "segment is null"));
         this.segmentHost = requireNonNull(segmentHost, "host is null");
@@ -66,26 +69,28 @@ public class PinotSplit
             checkArgument(segmentHost.isPresent(), "Segment host address is missing from the split");
         }
         else {
-            checkArgument(brokerPql.isPresent(), "brokerPql is missing from the split");
+            checkArgument(brokerPinotQuery.isPresent(), "brokerPinotQuery is missing from the split");
         }
     }
 
-    public static PinotSplit createBrokerSplit(String connectorId, PinotQueryGenerator.GeneratedPql brokerPql)
+    public static PinotSplit createBrokerSplit(String connectorId, List<PinotColumnHandle> expectedColumnHandles, PinotQueryGenerator.GeneratedPinotQuery brokerQuery)
     {
         return new PinotSplit(
                 requireNonNull(connectorId, "connector id is null"),
                 SplitType.BROKER,
-                Optional.of(requireNonNull(brokerPql, "brokerPql is null")),
+                expectedColumnHandles,
+                Optional.of(requireNonNull(brokerQuery, "brokerQuery is null")),
                 Optional.empty(),
                 ImmutableList.of(),
                 Optional.empty());
     }
 
-    public static PinotSplit createSegmentSplit(String connectorId, String pql, List<String> segments, String segmentHost)
+    public static PinotSplit createSegmentSplit(String connectorId, String pql, List<PinotColumnHandle> expectedColumnHandles, List<String> segments, String segmentHost)
     {
         return new PinotSplit(
                 requireNonNull(connectorId, "connector id is null"),
                 SplitType.SEGMENT,
+                expectedColumnHandles,
                 Optional.empty(),
                 Optional.of(requireNonNull(pql, "pql is null")),
                 requireNonNull(segments, "segments are null"),
@@ -105,9 +110,9 @@ public class PinotSplit
     }
 
     @JsonProperty
-    public Optional<PinotQueryGenerator.GeneratedPql> getBrokerPql()
+    public Optional<PinotQueryGenerator.GeneratedPinotQuery> getBrokerPinotQuery()
     {
-        return brokerPql;
+        return brokerPinotQuery;
     }
 
     @JsonProperty
@@ -134,11 +139,18 @@ public class PinotSplit
         return toStringHelper(this)
                 .add("connectorId", connectorId)
                 .add("splitType", splitType)
+                .add("columnHandle", expectedColumnHandles)
                 .add("segmentPql", segmentPql)
-                .add("brokerPql", brokerPql)
+                .add("brokerPinotQuery", brokerPinotQuery)
                 .add("segments", segments)
                 .add("segmentHost", segmentHost)
                 .toString();
+    }
+
+    @JsonProperty
+    public List<PinotColumnHandle> getExpectedColumnHandles()
+    {
+        return expectedColumnHandles;
     }
 
     @Override

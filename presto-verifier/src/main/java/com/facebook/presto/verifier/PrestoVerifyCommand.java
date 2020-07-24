@@ -14,7 +14,6 @@
 package com.facebook.presto.verifier;
 
 import com.facebook.presto.sql.parser.SqlParserOptions;
-import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.verifier.framework.AbstractVerifyCommand;
 import com.facebook.presto.verifier.framework.SourceQuery;
 import com.facebook.presto.verifier.prestoaction.PrestoExceptionClassifier;
@@ -65,12 +64,6 @@ public class PrestoVerifyCommand
     @Override
     public SqlExceptionClassifier getSqlExceptionClassifier()
     {
-        return PrestoExceptionClassifier.createDefault();
-    }
-
-    @Override
-    public List<Property> getTablePropertyOverrides()
-    {
-        return ImmutableList.of();
+        return PrestoExceptionClassifier.defaultBuilder().build();
     }
 }

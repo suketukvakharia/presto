@@ -13,21 +13,30 @@
  */
 package com.facebook.presto.hive.orc;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.Subfield;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.relation.Predicate;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.expressions.DefaultRowExpressionTraversalVisitor;
 import com.facebook.presto.hive.BucketAdaptation;
+import com.facebook.presto.hive.EncryptionInformation;
 import com.facebook.presto.hive.FileFormatDataSourceStats;
-import com.facebook.presto.hive.FileOpener;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveClientConfig;
 import com.facebook.presto.hive.HiveCoercer;
 import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.hive.HiveFileContext;
+import com.facebook.presto.hive.HiveOrcAggregatedMemoryContext;
 import com.facebook.presto.hive.HiveSelectivePageSourceFactory;
 import com.facebook.presto.hive.HiveType;
 import com.facebook.presto.hive.SubfieldExtractor;
 import com.facebook.presto.hive.metastore.Storage;
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
+import com.facebook.presto.orc.DwrfEncryptionProvider;
 import com.facebook.presto.orc.FilterFunction;
+import com.facebook.presto.orc.OrcAggregatedMemoryContext;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcDataSourceId;
 import com.facebook.presto.orc.OrcEncoding;
@@ -42,32 +51,27 @@ import com.facebook.presto.orc.cache.OrcFileTailSource;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.FixedPageSource;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.DeterminismEvaluator;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
-import com.facebook.presto.spi.relation.Predicate;
 import com.facebook.presto.spi.relation.PredicateCompiler;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.RowExpressionService;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
@@ -111,7 +115,7 @@ import static com.facebook.presto.hive.HiveSessionProperties.isOrcBloomFiltersEn
 import static com.facebook.presto.hive.HiveSessionProperties.isOrcZstdJniDecompressionEnabled;
 import static com.facebook.presto.hive.HiveUtil.getPhysicalHiveColumnHandles;
 import static com.facebook.presto.hive.HiveUtil.typedPartitionKey;
-import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.orc.DwrfEncryptionProvider.NO_ENCRYPTION;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
 import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.AND;
@@ -137,7 +141,6 @@ public class OrcSelectivePageSourceFactory
     private final int domainCompactionThreshold;
     private final OrcFileTailSource orcFileTailSource;
     private final StripeMetadataSource stripeMetadataSource;
-    private final FileOpener fileOpener;
     private final TupleDomainFilterCache tupleDomainFilterCache;
 
     @Inject
@@ -150,7 +153,6 @@ public class OrcSelectivePageSourceFactory
             FileFormatDataSourceStats stats,
             OrcFileTailSource orcFileTailSource,
             StripeMetadataSource stripeMetadataSource,
-            FileOpener fileOpener,
             TupleDomainFilterCache tupleDomainFilterCache)
     {
         this(
@@ -163,7 +165,6 @@ public class OrcSelectivePageSourceFactory
                 config.getDomainCompactionThreshold(),
                 orcFileTailSource,
                 stripeMetadataSource,
-                fileOpener,
                 tupleDomainFilterCache);
     }
 
@@ -177,7 +178,6 @@ public class OrcSelectivePageSourceFactory
             int domainCompactionThreshold,
             OrcFileTailSource orcFileTailSource,
             StripeMetadataSource stripeMetadataSource,
-            FileOpener fileOpener,
             TupleDomainFilterCache tupleDomainFilterCache)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
@@ -189,7 +189,6 @@ public class OrcSelectivePageSourceFactory
         this.domainCompactionThreshold = domainCompactionThreshold;
         this.orcFileTailSource = requireNonNull(orcFileTailSource, "orcFileTailCache is null");
         this.stripeMetadataSource = requireNonNull(stripeMetadataSource, "stripeMetadataSource is null");
-        this.fileOpener = requireNonNull(fileOpener, "fileOpener is null");
         this.tupleDomainFilterCache = requireNonNull(tupleDomainFilterCache, "tupleDomainFilterCache is null");
     }
 
@@ -210,7 +209,8 @@ public class OrcSelectivePageSourceFactory
             TupleDomain<Subfield> domainPredicate,
             RowExpression remainingPredicate,
             DateTimeZone hiveStorageTimeZone,
-            HiveFileContext hiveFileContext)
+            HiveFileContext hiveFileContext,
+            Optional<EncryptionInformation> encryptionInformation)
     {
         if (!OrcSerde.class.getName().equals(storage.getStorageFormat().getSerDe())) {
             return Optional.empty();
@@ -248,8 +248,9 @@ public class OrcSelectivePageSourceFactory
                 orcFileTailSource,
                 stripeMetadataSource,
                 hiveFileContext,
-                fileOpener,
-                tupleDomainFilterCache));
+                tupleDomainFilterCache,
+                encryptionInformation,
+                NO_ENCRYPTION));
     }
 
     public static OrcSelectivePageSource createOrcPageSource(
@@ -279,8 +280,9 @@ public class OrcSelectivePageSourceFactory
             OrcFileTailSource orcFileTailSource,
             StripeMetadataSource stripeMetadataSource,
             HiveFileContext hiveFileContext,
-            FileOpener fileOpener,
-            TupleDomainFilterCache tupleDomainFilterCache)
+            TupleDomainFilterCache tupleDomainFilterCache,
+            Optional<EncryptionInformation> encryptionInformation,
+            DwrfEncryptionProvider dwrfEncryptionProvider)
     {
         checkArgument(domainCompactionThreshold >= 1, "domainCompactionThreshold must be at least 1");
 
@@ -294,8 +296,7 @@ public class OrcSelectivePageSourceFactory
 
         OrcDataSource orcDataSource;
         try {
-            FileSystem fileSystem = hdfsEnvironment.getFileSystem(session.getUser(), path, configuration);
-            FSDataInputStream inputStream = fileOpener.open(fileSystem, path, hiveFileContext);
+            FSDataInputStream inputStream = hdfsEnvironment.getFileSystem(session.getUser(), path, configuration).openFile(path, hiveFileContext);
             orcDataSource = new HdfsOrcDataSource(
                     new OrcDataSourceId(path.toString()),
                     fileSize,
@@ -314,9 +315,17 @@ public class OrcSelectivePageSourceFactory
             throw new PrestoException(HIVE_CANNOT_OPEN_SPLIT, splitError(e, path, start, length), e);
         }
 
-        AggregatedMemoryContext systemMemoryUsage = newSimpleAggregatedMemoryContext();
+        OrcAggregatedMemoryContext systemMemoryUsage = new HiveOrcAggregatedMemoryContext();
         try {
-            OrcReader reader = new OrcReader(orcDataSource, orcEncoding, orcFileTailSource, stripeMetadataSource, orcReaderOptions, hiveFileContext);
+            OrcReader reader = new OrcReader(
+                    orcDataSource,
+                    orcEncoding,
+                    orcFileTailSource,
+                    stripeMetadataSource,
+                    systemMemoryUsage,
+                    orcReaderOptions,
+                    hiveFileContext.isCacheable(),
+                    dwrfEncryptionProvider);
 
             checkArgument(!domainPredicate.isNone(), "Unexpected NONE domain");
 
@@ -368,6 +377,11 @@ public class OrcSelectivePageSourceFactory
 
             List<FilterFunction> filterFunctions = toFilterFunctions(replaceExpression(remainingPredicate, variableToInput), bucketAdapter, session, rowExpressionService.getDeterminismEvaluator(), rowExpressionService.getPredicateCompiler());
 
+            Map<Integer, Slice> keyMap = ImmutableMap.of();
+            if (encryptionInformation.isPresent() && encryptionInformation.get().getDwrfEncryptionMetadata().isPresent()) {
+                keyMap = encryptionInformation.get().getDwrfEncryptionMetadata().get().toKeyMap(reader.getTypes(), physicalColumns);
+            }
+
             OrcSelectiveRecordReader recordReader = reader.createSelectiveRecordReader(
                     columnTypes,
                     outputIndices,
@@ -384,12 +398,13 @@ public class OrcSelectivePageSourceFactory
                     session.getSqlFunctionProperties().isLegacyMapSubscript(),
                     systemMemoryUsage,
                     Optional.empty(),
-                    INITIAL_BATCH_SIZE);
+                    INITIAL_BATCH_SIZE,
+                    keyMap);
 
             return new OrcSelectivePageSource(
                     recordReader,
                     orcDataSource,
-                    systemMemoryUsage.newAggregatedMemoryContext(),
+                    systemMemoryUsage.newOrcAggregatedMemoryContext(),
                     stats);
         }
         catch (Exception e) {
@@ -397,6 +412,10 @@ public class OrcSelectivePageSourceFactory
                 orcDataSource.close();
             }
             catch (IOException ignored) {
+            }
+            // instanceof and class comparison do not work here since they are loaded by different class loaders.
+            if (e.getClass().getName().equals(UncheckedExecutionException.class.getName()) && e.getCause() instanceof PrestoException) {
+                throw (PrestoException) e.getCause();
             }
             if (e instanceof PrestoException) {
                 throw (PrestoException) e;
@@ -599,7 +618,7 @@ public class OrcSelectivePageSourceFactory
     {
         ImmutableList.Builder<FilterFunction> filterFunctions = ImmutableList.builder();
 
-        bucketAdapter.map(predicate -> new FilterFunction(session, true, predicate))
+        bucketAdapter.map(predicate -> new FilterFunction(session.getSqlFunctionProperties(), true, predicate))
                 .ifPresent(filterFunctions::add);
 
         if (TRUE_CONSTANT.equals(filter)) {
@@ -607,13 +626,13 @@ public class OrcSelectivePageSourceFactory
         }
 
         if (!isAdaptiveFilterReorderingEnabled(session)) {
-            filterFunctions.add(new FilterFunction(session, determinismEvaluator.isDeterministic(filter), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), filter).get()));
+            filterFunctions.add(new FilterFunction(session.getSqlFunctionProperties(), determinismEvaluator.isDeterministic(filter), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), filter).get()));
             return filterFunctions.build();
         }
 
         List<RowExpression> conjuncts = extractConjuncts(filter);
         if (conjuncts.size() == 1) {
-            filterFunctions.add(new FilterFunction(session, determinismEvaluator.isDeterministic(filter), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), filter).get()));
+            filterFunctions.add(new FilterFunction(session.getSqlFunctionProperties(), determinismEvaluator.isDeterministic(filter), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), filter).get()));
             return filterFunctions.build();
         }
 
@@ -625,7 +644,7 @@ public class OrcSelectivePageSourceFactory
 
         inputsToConjuncts.values().stream()
                 .map(expressions -> binaryExpression(AND, expressions))
-                .map(predicate -> new FilterFunction(session, determinismEvaluator.isDeterministic(predicate), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), predicate).get()))
+                .map(predicate -> new FilterFunction(session.getSqlFunctionProperties(), determinismEvaluator.isDeterministic(predicate), predicateCompiler.compilePredicate(session.getSqlFunctionProperties(), predicate).get()))
                 .forEach(filterFunctions::add);
 
         return filterFunctions.build();
@@ -681,7 +700,7 @@ public class OrcSelectivePageSourceFactory
         }
 
         @Override
-        public boolean evaluate(ConnectorSession session, Page page, int position)
+        public boolean evaluate(SqlFunctionProperties properties, Page page, int position)
         {
             int bucket = getHiveBucket(tableBucketCount, typeInfoList, page, position);
             if ((bucket - bucketToKeep) % partitionBucketCount != 0) {

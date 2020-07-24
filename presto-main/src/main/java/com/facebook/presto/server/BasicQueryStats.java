@@ -28,9 +28,7 @@ import java.util.OptionalDouble;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * Lightweight version of QueryStats. Parts of the web UI depend on the fields
@@ -60,6 +58,8 @@ public class BasicQueryStats
     private final DataSize userMemoryReservation;
     private final DataSize totalMemoryReservation;
     private final DataSize peakUserMemoryReservation;
+    private final DataSize peakTotalMemoryReservation;
+    private final DataSize peakTaskTotalMemoryReservation;
     private final Duration totalCpuTime;
     private final Duration totalScheduledTime;
 
@@ -88,6 +88,8 @@ public class BasicQueryStats
             @JsonProperty("userMemoryReservation") DataSize userMemoryReservation,
             @JsonProperty("totalMemoryReservation") DataSize totalMemoryReservation,
             @JsonProperty("peakUserMemoryReservation") DataSize peakUserMemoryReservation,
+            @JsonProperty("peakTotalMemoryReservation") DataSize peakTotalMemoryReservation,
+            @JsonProperty("peakTaskTotalMemoryReservation") DataSize peakTaskTotalMemoryReservation,
             @JsonProperty("totalCpuTime") Duration totalCpuTime,
             @JsonProperty("totalScheduledTime") Duration totalScheduledTime,
             @JsonProperty("fullyBlocked") boolean fullyBlocked,
@@ -120,6 +122,8 @@ public class BasicQueryStats
         this.userMemoryReservation = userMemoryReservation;
         this.totalMemoryReservation = totalMemoryReservation;
         this.peakUserMemoryReservation = peakUserMemoryReservation;
+        this.peakTotalMemoryReservation = peakTotalMemoryReservation;
+        this.peakTaskTotalMemoryReservation = peakTaskTotalMemoryReservation;
         this.totalCpuTime = totalCpuTime;
         this.totalScheduledTime = totalScheduledTime;
 
@@ -149,40 +153,14 @@ public class BasicQueryStats
                 queryStats.getUserMemoryReservation(),
                 queryStats.getTotalMemoryReservation(),
                 queryStats.getPeakUserMemoryReservation(),
+                queryStats.getPeakTotalMemoryReservation(),
+                queryStats.getPeakTaskTotalMemory(),
                 queryStats.getTotalCpuTime(),
                 queryStats.getTotalScheduledTime(),
                 queryStats.isFullyBlocked(),
                 queryStats.getBlockedReasons(),
                 queryStats.getTotalAllocation(),
                 queryStats.getProgressPercentage());
-    }
-
-    public static BasicQueryStats immediateFailureQueryStats()
-    {
-        DateTime now = DateTime.now();
-        return new BasicQueryStats(
-                now,
-                now,
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
-                0,
-                0,
-                0,
-                0,
-                0,
-                new DataSize(0, BYTE),
-                0,
-                0,
-                new DataSize(0, BYTE),
-                new DataSize(0, BYTE),
-                new DataSize(0, BYTE),
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
-                false,
-                ImmutableSet.of(),
-                new DataSize(0, BYTE),
-                OptionalDouble.empty());
     }
 
     @JsonProperty
@@ -278,6 +256,18 @@ public class BasicQueryStats
     public DataSize getPeakUserMemoryReservation()
     {
         return peakUserMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakTotalMemoryReservation()
+    {
+        return peakTotalMemoryReservation;
+    }
+
+    @JsonProperty
+    public DataSize getPeakTaskTotalMemoryReservation()
+    {
+        return peakTaskTotalMemoryReservation;
     }
 
     @JsonProperty

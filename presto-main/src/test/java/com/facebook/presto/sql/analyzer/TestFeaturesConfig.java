@@ -58,6 +58,7 @@ public class TestFeaturesConfig
                 .setJoinDistributionType(PARTITIONED)
                 .setJoinMaxBroadcastTableSize(null)
                 .setGroupedExecutionForAggregationEnabled(false)
+                .setGroupedExecutionForJoinEnabled(true)
                 .setGroupedExecutionForEligibleTableScansEnabled(false)
                 .setDynamicScheduleForGroupedExecutionEnabled(false)
                 .setRecoverableGroupedExecutionEnabled(false)
@@ -96,7 +97,9 @@ public class TestFeaturesConfig
                 .setLegacyLogFunction(false)
                 .setIterativeOptimizerEnabled(true)
                 .setIterativeOptimizerTimeout(new Duration(3, MINUTES))
+                .setRuntimeOptimizerEnabled(false)
                 .setEnableStatsCalculator(true)
+                .setEnableStatsCollectionForTemporaryTable(false)
                 .setIgnoreStatsCalculatorFailures(true)
                 .setPrintStatsForNonJoinQuery(false)
                 .setDefaultFilterFactorEnabled(false)
@@ -131,7 +134,11 @@ public class TestFeaturesConfig
                 .setListBuiltInFunctionsOnly(true)
                 .setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy.AUTOMATIC)
                 .setExperimentalFunctionsEnabled(false)
-                .setUseLegacyScheduler(true));
+                .setUseLegacyScheduler(true)
+                .setOptimizeCommonSubExpressions(true)
+                .setPreferDistributedUnion(true)
+                .setOptimizeNullsInJoin(false)
+                .setWarnOnNoTableLayoutFilter(""));
     }
 
     @Test
@@ -143,7 +150,9 @@ public class TestFeaturesConfig
                 .put("network-cost-weight", "0.2")
                 .put("experimental.iterative-optimizer-enabled", "false")
                 .put("experimental.iterative-optimizer-timeout", "10s")
+                .put("experimental.runtime-optimizer-enabled", "true")
                 .put("experimental.enable-stats-calculator", "false")
+                .put("experimental.enable-stats-collection-for-temporary-table", "true")
                 .put("optimizer.ignore-stats-calculator-failures", "false")
                 .put("print-stats-for-non-join-query", "true")
                 .put("optimizer.default-filter-factor-enabled", "true")
@@ -157,6 +166,7 @@ public class TestFeaturesConfig
                 .put("join-distribution-type", "BROADCAST")
                 .put("join-max-broadcast-table-size", "42GB")
                 .put("grouped-execution-for-aggregation-enabled", "true")
+                .put("grouped-execution-for-join-enabled", "false")
                 .put("experimental.grouped-execution-for-eligible-table-scans-enabled", "true")
                 .put("dynamic-schedule-for-grouped-execution", "true")
                 .put("recoverable-grouped-execution-enabled", "true")
@@ -219,6 +229,10 @@ public class TestFeaturesConfig
                 .put("partitioning-precision-strategy", "PREFER_EXACT_PARTITIONING")
                 .put("experimental-functions-enabled", "true")
                 .put("use-legacy-scheduler", "false")
+                .put("optimize-common-sub-expressions", "false")
+                .put("prefer-distributed-union", "false")
+                .put("optimize-nulls-in-join", "true")
+                .put("warn-on-no-table-layout-filter", "ry@nlikestheyankees,ds")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -227,13 +241,16 @@ public class TestFeaturesConfig
                 .setNetworkCostWeight(0.2)
                 .setIterativeOptimizerEnabled(false)
                 .setIterativeOptimizerTimeout(new Duration(10, SECONDS))
+                .setRuntimeOptimizerEnabled(true)
                 .setEnableStatsCalculator(false)
+                .setEnableStatsCollectionForTemporaryTable(true)
                 .setIgnoreStatsCalculatorFailures(false)
                 .setPrintStatsForNonJoinQuery(true)
                 .setDistributedIndexJoinsEnabled(true)
                 .setJoinDistributionType(BROADCAST)
                 .setJoinMaxBroadcastTableSize(new DataSize(42, GIGABYTE))
                 .setGroupedExecutionForAggregationEnabled(true)
+                .setGroupedExecutionForJoinEnabled(false)
                 .setGroupedExecutionForEligibleTableScansEnabled(true)
                 .setDynamicScheduleForGroupedExecutionEnabled(true)
                 .setRecoverableGroupedExecutionEnabled(true)
@@ -302,7 +319,11 @@ public class TestFeaturesConfig
                 .setListBuiltInFunctionsOnly(false)
                 .setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy.PREFER_EXACT_PARTITIONING)
                 .setExperimentalFunctionsEnabled(true)
-                .setUseLegacyScheduler(false);
+                .setUseLegacyScheduler(false)
+                .setOptimizeCommonSubExpressions(false)
+                .setPreferDistributedUnion(false)
+                .setOptimizeNullsInJoin(true)
+                .setWarnOnNoTableLayoutFilter("ry@nlikestheyankees,ds");
         assertFullMapping(properties, expected);
     }
 

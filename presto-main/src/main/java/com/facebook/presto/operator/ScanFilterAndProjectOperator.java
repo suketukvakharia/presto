@@ -13,6 +13,12 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.PageBuilder;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.LazyBlock;
+import com.facebook.presto.common.block.LazyBlockLoader;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.project.CursorProcessor;
@@ -21,17 +27,11 @@ import com.facebook.presto.operator.project.MergingPageOutput;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.UpdatablePageSource;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.LazyBlock;
-import com.facebook.presto.spi.block.LazyBlockLoader;
 import com.facebook.presto.spi.plan.PlanNodeId;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.EmptySplit;
 import com.facebook.presto.split.EmptySplitPageSource;
 import com.facebook.presto.split.PageSourceProvider;
@@ -245,7 +245,7 @@ public class ScanFilterAndProjectOperator
     {
         DriverYieldSignal yieldSignal = operatorContext.getDriverContext().getYieldSignal();
         if (!finishing && !yieldSignal.isSet()) {
-            CursorProcessorOutput output = cursorProcessor.process(operatorContext.getSession().toConnectorSession(), yieldSignal, cursor, pageBuilder);
+            CursorProcessorOutput output = cursorProcessor.process(operatorContext.getSession().getSqlFunctionProperties(), yieldSignal, cursor, pageBuilder);
             pageSourceMemoryContext.setBytes(cursor.getSystemMemoryUsage());
 
             recordCursorInputStats(output.getProcessedRows());
@@ -278,7 +278,7 @@ public class ScanFilterAndProjectOperator
                 // update operator stats
                 page = recordProcessedInput(page);
 
-                Iterator<Optional<Page>> output = pageProcessor.process(operatorContext.getSession().toConnectorSession(), yieldSignal, pageProcessorMemoryContext, page);
+                Iterator<Optional<Page>> output = pageProcessor.process(operatorContext.getSession().getSqlFunctionProperties(), yieldSignal, pageProcessorMemoryContext, page);
                 mergingOutput.addInput(output);
             }
 
@@ -342,23 +342,34 @@ public class ScanFilterAndProjectOperator
     private Page recordProcessedInput(Page page)
     {
         long blockSizeSum = 0L;
-        Block[] blocks = new Block[page.getChannelCount()];
-        for (int i = 0; i < blocks.length; ++i) {
+        Block[] blocks = null;
+        for (int i = 0; i < page.getChannelCount(); ++i) {
             Block block = page.getBlock(i);
             // account processed bytes from lazy blocks only when they are loaded
-            if (block instanceof LazyBlock) {
+            if (block instanceof LazyBlock && !((LazyBlock) block).isLoaded()) {
+                if (blocks == null) {
+                    blocks = copyOfPageBlocks(page);
+                }
                 blocks[i] = new LazyBlock(page.getPositionCount(), new RecordingLazyBlockLoader((LazyBlock) block));
             }
             else {
                 blockSizeSum += block.getSizeInBytes();
-                blocks[i] = block;
             }
         }
         // stats update
         operatorContext.recordProcessedInput(blockSizeSum, page.getPositionCount());
         recordPageSourceRawInputStats();
 
-        return new Page(page.getPositionCount(), blocks);
+        return (blocks == null) ? page : new Page(page.getPositionCount(), blocks);
+    }
+
+    private static Block[] copyOfPageBlocks(Page page)
+    {
+        Block[] blocks = new Block[page.getChannelCount()];
+        for (int i = 0; i < blocks.length; i++) {
+            blocks[i] = page.getBlock(i);
+        }
+        return blocks;
     }
 
     public static class ScanFilterAndProjectOperatorFactory

@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.spi.connector;
 
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
@@ -31,8 +33,8 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
+import com.facebook.presto.spi.TableLayoutFilterCoverage;
 import com.facebook.presto.spi.api.Experimental;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -40,7 +42,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
@@ -54,6 +55,7 @@ import java.util.stream.Collectors;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.TableLayoutFilterCoverage.NOT_APPLICABLE;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
 import static java.util.stream.Collectors.toList;
@@ -237,6 +239,14 @@ public interface ConnectorMetadata
      * @throws RuntimeException if table or column handles are no longer valid
      */
     ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle);
+
+    /**
+     * Returns a TupleDomain of constraints that is suitable for ExplainIO
+     */
+    default TupleDomain<ColumnHandle> toExplainIOConstraints(ConnectorSession session, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> constraints)
+    {
+        return constraints;
+    }
 
     /**
      * Gets the metadata for all columns that match the specified table prefix.
@@ -669,24 +679,29 @@ public interface ConnectorMetadata
     }
 
     /**
-     * Commits partition for table creation.
-     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
+     * Commits page sink for table creation.
+     * To enable recoverable grouped execution, it is required that output connector supports page sink commit.
      * This method is unstable and subject to change in the future.
      */
     @Experimental
-    default CompletableFuture<Void> commitPartitionAsync(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    default CompletableFuture<Void> commitPageSinkAsync(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support page sink commit");
     }
 
     /**
-     * Commits partition for table insertion.
-     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
+     * Commits page sink for table insertion.
+     * To enable recoverable grouped execution, it is required that output connector supports page sink commit.
      * This method is unstable and subject to change in the future.
      */
     @Experimental
-    default CompletableFuture<Void> commitPartitionAsync(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
+    default CompletableFuture<Void> commitPageSinkAsync(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support page sink commit");
+    }
+
+    default TableLayoutFilterCoverage getTableLayoutFilterCoverage(ConnectorTableLayoutHandle tableHandle, Set<String> relevantPartitionColumns)
+    {
+        return NOT_APPLICABLE;
     }
 }

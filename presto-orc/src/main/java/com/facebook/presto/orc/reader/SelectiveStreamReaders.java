@@ -13,28 +13,28 @@
  */
 package com.facebook.presto.orc.reader;
 
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
+import com.facebook.presto.common.Subfield;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.BigintType;
+import com.facebook.presto.common.type.BooleanType;
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.DateType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.DoubleType;
+import com.facebook.presto.common.type.IntegerType;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.RealType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.SmallintType;
+import com.facebook.presto.common.type.TimestampType;
+import com.facebook.presto.common.type.TinyintType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarbinaryType;
+import com.facebook.presto.common.type.VarcharType;
+import com.facebook.presto.orc.OrcAggregatedMemoryContext;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.metadata.OrcType.OrcTypeKind;
-import com.facebook.presto.spi.Subfield;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.BooleanType;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.DoubleType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.SmallintType;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.TinyintType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarbinaryType;
-import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import org.joda.time.DateTimeZone;
@@ -44,8 +44,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Predicate;
 
-import static com.facebook.presto.array.Arrays.ensureCapacity;
-import static com.facebook.presto.spi.type.Decimals.MAX_SHORT_PRECISION;
+import static com.facebook.presto.common.type.Decimals.MAX_SHORT_PRECISION;
+import static com.facebook.presto.orc.array.Arrays.ensureCapacity;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 
@@ -60,19 +60,19 @@ public final class SelectiveStreamReaders
             List<Subfield> requiredSubfields,
             DateTimeZone hiveStorageTimeZone,
             boolean legacyMapSubscript,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         OrcTypeKind type = streamDescriptor.getOrcTypeKind();
         switch (type) {
             case BOOLEAN: {
                 checkArgument(requiredSubfields.isEmpty(), "Boolean stream reader doesn't support subfields");
                 verifyStreamType(streamDescriptor, outputType, BooleanType.class::isInstance);
-                return new BooleanSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                return new BooleanSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             }
             case BYTE: {
                 checkArgument(requiredSubfields.isEmpty(), "Byte stream reader doesn't support subfields");
                 verifyStreamType(streamDescriptor, outputType, TinyintType.class::isInstance);
-                return new ByteSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                return new ByteSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             }
             case SHORT:
             case INT:
@@ -85,12 +85,12 @@ public final class SelectiveStreamReaders
             case FLOAT: {
                 checkArgument(requiredSubfields.isEmpty(), "Float type stream reader doesn't support subfields");
                 verifyStreamType(streamDescriptor, outputType, RealType.class::isInstance);
-                return new FloatSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                return new FloatSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             }
             case DOUBLE:
                 checkArgument(requiredSubfields.isEmpty(), "Double stream reader doesn't support subfields");
                 verifyStreamType(streamDescriptor, outputType, DoubleType.class::isInstance);
-                return new DoubleSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                return new DoubleSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType.isPresent(), systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             case BINARY:
             case STRING:
             case VARCHAR:
@@ -101,7 +101,7 @@ public final class SelectiveStreamReaders
             case TIMESTAMP: {
                 checkArgument(requiredSubfields.isEmpty(), "Timestamp stream reader doesn't support subfields");
                 verifyStreamType(streamDescriptor, outputType, TimestampType.class::isInstance);
-                return new TimestampSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), hiveStorageTimeZone, outputType.isPresent(), systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                return new TimestampSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), hiveStorageTimeZone, outputType.isPresent(), systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
             }
             case LIST:
                 verifyStreamType(streamDescriptor, outputType, ArrayType.class::isInstance);
@@ -115,10 +115,10 @@ public final class SelectiveStreamReaders
             case DECIMAL: {
                 verifyStreamType(streamDescriptor, outputType, DecimalType.class::isInstance);
                 if (streamDescriptor.getOrcType().getPrecision().get() <= MAX_SHORT_PRECISION) {
-                    return new ShortDecimalSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType, systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                    return new ShortDecimalSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType, systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
                 }
                 else {
-                    return new LongDecimalSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType, systemMemoryContext.newLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
+                    return new LongDecimalSelectiveStreamReader(streamDescriptor, getOptionalOnlyFilter(type, filters), outputType, systemMemoryContext.newOrcLocalMemoryContext(SelectiveStreamReaders.class.getSimpleName()));
                 }
             }
             case UNION:
@@ -152,7 +152,7 @@ public final class SelectiveStreamReaders
             List<Subfield> requiredSubfields,
             DateTimeZone hiveStorageTimeZone,
             boolean legacyMapSubscript,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         switch (streamDescriptor.getOrcTypeKind()) {
             case BOOLEAN:
@@ -180,16 +180,16 @@ public final class SelectiveStreamReaders
                     // No need to read the elements when output is not required and the filter is a simple IS [NOT] NULL
                     return null;
                 }
-                return createStreamReader(streamDescriptor, elementFilters, outputType, requiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+                return createStreamReader(streamDescriptor, elementFilters, outputType, requiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
             case LIST:
                 Optional<ListFilter> childFilter = parentFilter.map(HierarchicalFilter::getChild).map(ListFilter.class::cast);
-                return new ListSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, childFilter.orElse(null), level, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+                return new ListSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, childFilter.orElse(null), level, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
             case STRUCT:
                 checkArgument(!parentFilter.isPresent(), "Filters on nested structs are not supported yet");
-                return new StructSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+                return new StructSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
             case MAP:
                 checkArgument(!parentFilter.isPresent(), "Filters on nested maps are not supported yet");
-                return new MapSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+                return new MapSelectiveStreamReader(streamDescriptor, ImmutableMap.of(), requiredSubfields, outputType, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
             case UNION:
             default:
                 throw new IllegalArgumentException("Unsupported type: " + streamDescriptor.getOrcTypeKind());

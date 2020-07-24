@@ -14,6 +14,8 @@
 package com.facebook.presto.druid;
 
 import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.type.BigintType;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.druid.DruidQueryGeneratorContext.Selection;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
@@ -22,6 +24,7 @@ import com.facebook.presto.spi.function.StandardFunctionResolution;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.FilterNode;
 import com.facebook.presto.spi.plan.LimitNode;
+import com.facebook.presto.spi.plan.MarkDistinctNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanVisitor;
 import com.facebook.presto.spi.plan.ProjectNode;
@@ -29,8 +32,6 @@ import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.TypeManager;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableMap;
@@ -48,8 +49,6 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.druid.DruidAggregationColumnNode.AggregationFunctionColumnNode;
-import static com.facebook.presto.druid.DruidAggregationColumnNode.ExpressionType.AGGREGATE;
-import static com.facebook.presto.druid.DruidAggregationColumnNode.ExpressionType.GROUP_BY;
 import static com.facebook.presto.druid.DruidAggregationColumnNode.GroupByColumnNode;
 import static com.facebook.presto.druid.DruidErrorCode.DRUID_PUSHDOWN_UNSUPPORTED_EXPRESSION;
 import static com.facebook.presto.druid.DruidPushdownUtils.computeAggregationNodes;
@@ -68,7 +67,8 @@ public class DruidQueryGenerator
             "min", "min",
             "max", "max",
             "avg", "avg",
-            "sum", "sum");
+            "sum", "sum",
+            "distinctcount", "DISTINCTCOUNT");
 
     private final TypeManager typeManager;
     private final FunctionMetadataManager functionMetadataManager;
@@ -194,6 +194,13 @@ public class DruidQueryGenerator
                 return ((VariableReferenceExpression) expression);
             }
             throw new PrestoException(DRUID_PUSHDOWN_UNSUPPORTED_EXPRESSION, "Unsupported pushdown for Druid connector. Expect variable reference, but get: " + expression);
+        }
+
+        @Override
+        public DruidQueryGeneratorContext visitMarkDistinct(MarkDistinctNode node, DruidQueryGeneratorContext context)
+        {
+            requireNonNull(context, "context is null");
+            return node.getSource().accept(this, context);
         }
 
         @Override

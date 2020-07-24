@@ -128,6 +128,7 @@ public class TestBasicQueryInfo
                         false,
                         Optional.empty(),
                         Optional.of(QueryType.INSERT),
+                        Optional.empty(),
                         Optional.empty()));
 
         assertEquals(basicInfo.getQueryId().getId(), "0");
@@ -150,6 +151,9 @@ public class TestBasicQueryInfo
         assertEquals(basicInfo.getQueryStats().getCumulativeUserMemory(), 20.0);
         assertEquals(basicInfo.getQueryStats().getUserMemoryReservation(), DataSize.valueOf("21GB"));
         assertEquals(basicInfo.getQueryStats().getPeakUserMemoryReservation(), DataSize.valueOf("23GB"));
+        assertEquals(basicInfo.getQueryStats().getPeakTotalMemoryReservation(), DataSize.valueOf("24GB"));
+        assertEquals(basicInfo.getQueryStats().getPeakTaskTotalMemoryReservation(), DataSize.valueOf("26GB"));
+
         assertEquals(basicInfo.getQueryStats().getTotalCpuTime(), Duration.valueOf("24m"));
 
         assertEquals(basicInfo.getQueryStats().isFullyBlocked(), true);

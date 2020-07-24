@@ -13,8 +13,15 @@
  */
 package com.facebook.presto.orc.reader;
 
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
-import com.facebook.presto.memory.context.LocalMemoryContext;
+import com.facebook.presto.common.Subfield;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockLease;
+import com.facebook.presto.common.block.ClosingBlockLease;
+import com.facebook.presto.common.block.RunLengthEncodedBlock;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.orc.OrcAggregatedMemoryContext;
+import com.facebook.presto.orc.OrcLocalMemoryContext;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.TupleDomainFilter.BigintRange;
@@ -26,13 +33,6 @@ import com.facebook.presto.orc.stream.BooleanInputStream;
 import com.facebook.presto.orc.stream.InputStreamSource;
 import com.facebook.presto.orc.stream.InputStreamSources;
 import com.facebook.presto.orc.stream.LongInputStream;
-import com.facebook.presto.spi.Subfield;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockLease;
-import com.facebook.presto.spi.block.ClosingBlockLease;
-import com.facebook.presto.spi.block.RunLengthEncodedBlock;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -47,10 +47,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.orc.TupleDomainFilter.IS_NOT_NULL;
 import static com.facebook.presto.orc.TupleDomainFilter.IS_NULL;
 import static com.facebook.presto.orc.TupleDomainFilterUtils.toBigintValues;
+import static com.facebook.presto.orc.array.Arrays.ensureCapacity;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.reader.SelectiveStreamReaders.initializeOutputPositions;
@@ -79,7 +79,7 @@ public class MapDirectSelectiveStreamReader
     private final SelectiveStreamReader keyReader;
     private final SelectiveStreamReader valueReader;
 
-    private final LocalMemoryContext systemMemoryContext;
+    private final OrcLocalMemoryContext systemMemoryContext;
 
     private int readOffset;
     private int nestedReadOffset;
@@ -114,13 +114,13 @@ public class MapDirectSelectiveStreamReader
             Optional<Type> outputType,
             DateTimeZone hiveStorageTimeZone,
             boolean legacyMapSubscript,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         checkArgument(filters.keySet().stream().map(Subfield::getPath).allMatch(List::isEmpty), "filters on nested columns are not supported yet");
 
         this.streamDescriptor = requireNonNull(streamDescriptor, "streamDescriptor is null");
         this.legacyMapSubscript = legacyMapSubscript;
-        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newLocalMemoryContext(MapDirectSelectiveStreamReader.class.getSimpleName());
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newOrcLocalMemoryContext(MapDirectSelectiveStreamReader.class.getSimpleName());
         this.outputRequired = requireNonNull(outputType, "outputType is null").isPresent();
         this.outputType = outputType.map(MapType.class::cast).orElse(null);
 
@@ -144,8 +144,8 @@ public class MapDirectSelectiveStreamReader
                         .collect(toImmutableList());
             }
 
-            this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
-            this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, elementRequiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+            this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
+            this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, elementRequiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
         }
         else {
             this.keyReader = null;
@@ -631,7 +631,7 @@ public class MapDirectSelectiveStreamReader
         outputPositionCount = positionCount;
     }
 
-    private BlockLease newLease(Block block, BlockLease...fieldBlockLeases)
+    private BlockLease newLease(Block block, BlockLease... fieldBlockLeases)
     {
         valuesInUse = true;
         return ClosingBlockLease.newLease(block, () -> {
@@ -658,11 +658,31 @@ public class MapDirectSelectiveStreamReader
     @Override
     public void close()
     {
+        if (keyReader != null) {
+            keyReader.close();
+        }
+        if (valueReader != null) {
+            valueReader.close();
+        }
+
+        nestedOffsets = null;
+        offsets = null;
+        nulls = null;
+        outputPositions = null;
+        nestedLengths = null;
+        nestedPositions = null;
+        nestedOutputPositions = null;
+
+        lengthStream = null;
+        lengthStreamSource = null;
+        presentStream = null;
+        lengthStreamSource = null;
+
         systemMemoryContext.close();
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(InputStreamSources dictionaryStreamSources, Map<Integer, ColumnEncoding> encoding)
             throws IOException
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);

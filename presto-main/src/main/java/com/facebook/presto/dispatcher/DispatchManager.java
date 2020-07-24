@@ -50,6 +50,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
+import static com.facebook.presto.SystemSessionProperties.getWarningHandlingLevel;
 import static com.facebook.presto.spi.StandardErrorCode.QUERY_TEXT_TOO_LARGE;
 import static com.facebook.presto.util.StatementUtils.getQueryType;
 import static com.facebook.presto.util.StatementUtils.isTransactionControlStatement;
@@ -64,7 +65,7 @@ public class DispatchManager
     private final QueryIdGenerator queryIdGenerator;
     private final QueryPreparer queryPreparer;
     private final ResourceGroupManager<?> resourceGroupManager;
-    private final WarningCollector warningCollector;
+    private final WarningCollectorFactory warningCollectorFactory;
     private final DispatchQueryFactory dispatchQueryFactory;
     private final FailedDispatchQueryFactory failedDispatchQueryFactory;
     private final TransactionManager transactionManager;
@@ -99,7 +100,7 @@ public class DispatchManager
         this.queryIdGenerator = requireNonNull(queryIdGenerator, "queryIdGenerator is null");
         this.queryPreparer = requireNonNull(queryPreparer, "queryPreparer is null");
         this.resourceGroupManager = requireNonNull(resourceGroupManager, "resourceGroupManager is null");
-        this.warningCollector = warningCollectorFactory.create();
+        this.warningCollectorFactory = requireNonNull(warningCollectorFactory, "warningCollectorFactory is null");
         this.dispatchQueryFactory = requireNonNull(dispatchQueryFactory, "dispatchQueryFactory is null");
         this.failedDispatchQueryFactory = requireNonNull(failedDispatchQueryFactory, "failedDispatchQueryFactory is null");
         this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
@@ -178,6 +179,7 @@ public class DispatchManager
             session = sessionSupplier.createSession(queryId, sessionContext);
 
             // prepare query
+            WarningCollector warningCollector = warningCollectorFactory.create(getWarningHandlingLevel(session));
             preparedQuery = queryPreparer.prepareQuery(session, query, warningCollector);
 
             // select resource group
@@ -270,6 +272,11 @@ public class DispatchManager
         return queryTracker.getQuery(queryId).getBasicQueryInfo();
     }
 
+    public QueryInfo getFullQueryInfo(QueryId queryId)
+    {
+        return queryTracker.getQuery(queryId).getQueryInfo();
+    }
+
     public Optional<DispatchInfo> getDispatchInfo(QueryId queryId)
     {
         return queryTracker.tryGetQuery(queryId)
@@ -277,6 +284,19 @@ public class DispatchManager
                     dispatchQuery.recordHeartbeat();
                     return dispatchQuery.getDispatchInfo();
                 });
+    }
+
+    public boolean isQueryPresent(QueryId queryId)
+    {
+        return queryTracker.tryGetQuery(queryId).isPresent();
+    }
+
+    public void failQuery(QueryId queryId, Throwable cause)
+    {
+        requireNonNull(cause, "cause is null");
+
+        queryTracker.tryGetQuery(queryId)
+                .ifPresent(query -> query.fail(cause));
     }
 
     public void cancelQuery(QueryId queryId)
